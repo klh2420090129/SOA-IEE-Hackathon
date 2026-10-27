@@ -235,7 +235,7 @@ class EndToEndVerticalSliceIntegrationTest {
         // Case D: Unverified Stacking Capability Failure and Approval Blocking
         ItemPlacementDto unverifiedBase = new ItemPlacementDto("b1", "it-base", 0, "NON_HAZ", "UN0000", 0, 0, 0, 1000, 1000, 1000, 400, "DEFAULT", null, null);
         ItemPlacementDto elevated = new ItemPlacementDto("e1", "it-elev", 0, "NON_HAZ", "UN0000", 0, 0, 1000, 1000, 1000, 1000, 300, "DEFAULT", true, 500.0);
-        CandidateLayoutDto unverifiedLayout = new CandidateLayoutDto("l-unverified", 1, "comp-trailer-1", "d4", "FEASIBLE", "HEURISTIC_EP_3D_V1", List.of(unverifiedBase, elevated));
+        CandidateLayoutDto unverifiedLayout = new CandidateLayoutDto("l-unverified", 1, "comp-trailer-1", null, "FEASIBLE", "HEURISTIC_EP_3D_V1", List.of(unverifiedBase, elevated));
         ValidationResultDto unverifiedRes = validator.validate(unverifiedLayout, comp, null);
         assertThat(unverifiedRes.isPassed()).isFalse();
         assertThat(unverifiedRes.getFindings()).anyMatch(f -> "UNVERIFIED_STACK_CAPABILITY".equals(f.getCode()));

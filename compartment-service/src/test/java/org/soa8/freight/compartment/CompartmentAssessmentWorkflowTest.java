@@ -301,4 +301,21 @@ class CompartmentAssessmentWorkflowTest {
         assertThat(second.getWorkflowStatus()).isEqualTo("PENDING_APPROVAL");
         assertThat(second.getValidationId()).isEqualTo("val-dup-001");
     }
+
+    @Test
+    void shouldRejectCandidateLayoutWhenSuppliedDigestContradictsCanonicalCalculation() {
+        CompartmentDto comp = new CompartmentDto("comp-tampered", "Standard Trailer", 12000, 2400, 2600, 25000);
+        AssessmentEntity assessment = workflowService.createAssessment("decl-tampered", 1, "snap-tampered", comp);
+
+        ItemPlacementDto item = new ItemPlacementDto("pl-t1", "item-t1", 1, "3", "UN1203", 0, 0, 0, 1000, 1000, 1000, 500, "DEFAULT", false, 0.0);
+        // Provide tampered digest that does not match canonical calculation
+        CandidateLayoutDto candidate = new CandidateLayoutDto(
+                "layout-tampered", 1, "comp-tampered", "0000000000000000000000000000000000000000000000000000000000000000",
+                "FEASIBLE", "HEURISTIC_EP_3D_V1", List.of(item)
+        );
+
+        assertThatThrownBy(() -> workflowService.recordCandidateLayout(assessment.getId(), candidate))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Candidate contentDigest mismatch");
+    }
 }

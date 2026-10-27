@@ -60,7 +60,7 @@ public class ControlledOptimizerStub {
         }
 
         String layoutId = UUID.randomUUID().toString();
-        String digest = DigestUtils.computeObjectDigest(placements);
+        String digest = org.soa8.freight.common.util.CandidateDigestUtils.computeCanonicalDigest(placements);
 
         return new CandidateLayoutDto(
                 layoutId,

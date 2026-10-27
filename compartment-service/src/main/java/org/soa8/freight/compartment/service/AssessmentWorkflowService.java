@@ -78,6 +78,15 @@ public class AssessmentWorkflowService {
             String placementsJson = objectMapper.writeValueAsString(candidate.getPlacements() != null ? candidate.getPlacements() : List.of());
             String computedDigest = org.soa8.freight.common.util.CandidateDigestUtils.computeCanonicalDigest(candidate.getPlacements());
 
+            // If the caller provided a candidate digest, verify it does not contradict canonical calculation
+            if (candidate.getContentDigest() != null && !candidate.getContentDigest().isBlank()
+                    && !candidate.getContentDigest().equalsIgnoreCase(computedDigest)) {
+                log.warn("Candidate digest mismatch in recordCandidateLayout: supplied=[{}] vs computed=[{}]",
+                        candidate.getContentDigest(), computedDigest);
+                throw new IllegalStateException("Candidate contentDigest mismatch: supplied=[" + candidate.getContentDigest()
+                        + "] does not match canonical calculation=[" + computedDigest + "]");
+            }
+
             CandidateLayoutEntity layout = new CandidateLayoutEntity(
                     candidate.getLayoutId() != null ? candidate.getLayoutId() : UUID.randomUUID().toString(),
                     candidate.getLayoutVersion() > 0 ? candidate.getLayoutVersion() : 1,
