@@ -154,7 +154,13 @@ public class IndependentValidator {
 
             // Verify supporting items allow stacking and are not overloaded
             for (ItemPlacementDto supporting : supportingItems) {
-                if (!supporting.isStackable()) {
+                if (supporting.getStackable() == null) {
+                    findings.add(new ValidationFindingDto(
+                            "CRITICAL", "UNVERIFIED_STACK_CAPABILITY",
+                            "Supporting item " + supporting.getCargoItemId() + " has unknown/missing stacking capability but carries upper item " + item.getCargoItemId(),
+                            List.of(supporting.getCargoItemId(), item.getCargoItemId())
+                    ));
+                } else if (!supporting.isStackable()) {
                     findings.add(new ValidationFindingDto(
                             "CRITICAL", "NON_STACKABLE_LOAD_BEARING",
                             "Supporting item " + supporting.getCargoItemId() + " is non-stackable but carries upper item " + item.getCargoItemId(),

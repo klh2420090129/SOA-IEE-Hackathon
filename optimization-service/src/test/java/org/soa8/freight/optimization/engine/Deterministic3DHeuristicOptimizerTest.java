@@ -255,4 +255,22 @@ class Deterministic3DHeuristicOptimizerTest {
         // Conservation check: total input units (2) == placed (1) + unassigned (1)
         assertThat(result.getPlacements().size() + result.getUnassignedItems().size()).isEqualTo(2);
     }
+
+    @Test
+    @DisplayName("16. Optimizer does not place an upper item on a non-stackable or unknown-stackable base")
+    void testDoesNotPlaceUpperItemOnNonStackableBase() {
+        // Narrow compartment: 1000mm length x 1000mm width x 2600mm height
+        // Base item fills the entire floor (1000x1000) and is non-stackable (stackable = false)
+        CompartmentDto narrowComp = new CompartmentDto("comp-narrow", "Single Stack Column", 1000, 1000, 2600, 5000.0);
+        CargoItemDto nonStackableBase = new CargoItemDto("it-base", "Base Non-Stackable", "NON_HAZ", "UN0000", 1000, 1000, 1000, 200.0, false, 0.0, 1);
+        CargoItemDto upperItem = new CargoItemDto("it-upper", "Upper Item", "NON_HAZ", "UN0000", 1000, 1000, 1000, 200.0, true, 500.0, 1);
+
+        CandidateLayoutDto result = optimizer.optimize(narrowComp, List.of(nonStackableBase, upperItem), standardSnapshot, "snap-2026-q4-v1");
+
+        // The base should be placed at (0,0,0). The upper item cannot be stacked on it, and cannot be placed on the floor because no floor space remains.
+        assertThat(result.getPlacements()).hasSize(1);
+        assertThat(result.getPlacements().get(0).getCargoItemId()).isEqualTo("it-base");
+        assertThat(result.getUnassignedItems()).hasSize(1);
+        assertThat(result.getUnassignedItems().get(0).getCargoItemId()).isEqualTo("it-upper");
+    }
 }

@@ -150,4 +150,38 @@ class IndependentValidatorTests {
         assertThat(res.isPassed()).isFalse();
         assertThat(res.getFindings()).anyMatch(f -> "STACK_WEIGHT_LIMIT_EXCEEDED".equals(f.getCode()));
     }
+
+    @Test
+    void shouldRejectCargoStackedOnUnknownStackableBaseWithUnverifiedStackCapability() {
+        CompartmentDto comp = new CompartmentDto("comp-1", "40ft", 12000, 2400, 2600, 25000);
+
+        // Base item has stackable = null (unknown capability)
+        ItemPlacementDto unknownBase = new ItemPlacementDto("p1", "it-unknown", 0, "NON_HAZ", "UN0000",
+                0, 0, 0, 1000, 1000, 1000, 400, "DEFAULT", null, null);
+        ItemPlacementDto upper = new ItemPlacementDto("p2", "it-upper", 0, "NON_HAZ", "UN0000",
+                0, 0, 1000, 1000, 1000, 1000, 300, "DEFAULT", true, 500.0);
+
+        CandidateLayoutDto layout = new CandidateLayoutDto("l-unknown-stack", 1, "comp-1", "digest", "FEASIBLE", "HEURISTIC_EP_3D_V1", List.of(unknownBase, upper));
+
+        ValidationResultDto res = validator.validate(layout, comp, null);
+        assertThat(res.isPassed()).isFalse();
+        assertThat(res.getFindings()).anyMatch(f -> "UNVERIFIED_STACK_CAPABILITY".equals(f.getCode()));
+    }
+
+    @Test
+    void shouldPassFloorOnlyCargoWithUnknownStackableMetadataWhenCarryingNoUpperLoad() {
+        CompartmentDto comp = new CompartmentDto("comp-1", "40ft", 12000, 2400, 2600, 25000);
+
+        // Floor items placed directly on floor (z=0) with unknown stackable capability (stackable = null)
+        ItemPlacementDto floorItem1 = new ItemPlacementDto("p1", "it1", 0, "NON_HAZ", "UN0000",
+                0, 0, 0, 1000, 1000, 1000, 400, "DEFAULT", null, null);
+        ItemPlacementDto floorItem2 = new ItemPlacementDto("p2", "it2", 0, "NON_HAZ", "UN0000",
+                1200, 0, 0, 1000, 1000, 1000, 400, "DEFAULT", null, null);
+
+        CandidateLayoutDto layout = new CandidateLayoutDto("l-floor-unknown", 1, "comp-1", "digest", "FEASIBLE", "HEURISTIC_EP_3D_V1", List.of(floorItem1, floorItem2));
+
+        ValidationResultDto res = validator.validate(layout, comp, null);
+        assertThat(res.isPassed()).isTrue();
+        assertThat(res.getFindings()).isEmpty();
+    }
 }

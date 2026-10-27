@@ -217,16 +217,23 @@ class EndToEndVerticalSliceIntegrationTest {
         assertThat(floatRes.isPassed()).isFalse();
         assertThat(floatRes.getFindings()).anyMatch(f -> "UNSUPPORTED_CARGO".equals(f.getCode()));
 
-        // Verify that recording a failed validation marks workflow as VALIDATION_FAILED and blocks approval
-        AssessmentEntity floatAssessment = assessmentWorkflowService.createAssessment("decl-float-01", 1, "snap-2026-q4-v1", comp);
-        floatAssessment = assessmentWorkflowService.recordCandidateLayout(floatAssessment.getId(), floatLayout);
-        floatAssessment = assessmentWorkflowService.recordValidationOutcome(floatAssessment.getId(), floatRes);
-        assertThat(floatAssessment.getWorkflowStatus()).isEqualTo("VALIDATION_FAILED");
+        // Case D: Unverified Stacking Capability Failure and Approval Blocking
+        ItemPlacementDto unverifiedBase = new ItemPlacementDto("b1", "it-base", 0, "NON_HAZ", "UN0000", 0, 0, 0, 1000, 1000, 1000, 400, "DEFAULT", null, null);
+        ItemPlacementDto elevated = new ItemPlacementDto("e1", "it-elev", 0, "NON_HAZ", "UN0000", 0, 0, 1000, 1000, 1000, 1000, 300, "DEFAULT", true, 500.0);
+        CandidateLayoutDto unverifiedLayout = new CandidateLayoutDto("l-unverified", 1, "comp-trailer-1", "d4", "FEASIBLE", "HEURISTIC_EP_3D_V1", List.of(unverifiedBase, elevated));
+        ValidationResultDto unverifiedRes = validator.validate(unverifiedLayout, comp, null);
+        assertThat(unverifiedRes.isPassed()).isFalse();
+        assertThat(unverifiedRes.getFindings()).anyMatch(f -> "UNVERIFIED_STACK_CAPABILITY".equals(f.getCode()));
 
-        String floatAsmtId = floatAssessment.getId();
-        String floatDigest = floatAssessment.getCandidateContentDigest();
+        AssessmentEntity unverifiedAssessment = assessmentWorkflowService.createAssessment("decl-unver-01", 1, "snap-2026-q4-v1", comp);
+        unverifiedAssessment = assessmentWorkflowService.recordCandidateLayout(unverifiedAssessment.getId(), unverifiedLayout);
+        unverifiedAssessment = assessmentWorkflowService.recordValidationOutcome(unverifiedAssessment.getId(), unverifiedRes);
+        assertThat(unverifiedAssessment.getWorkflowStatus()).isEqualTo("VALIDATION_FAILED");
+
+        String unverAsmtId = unverifiedAssessment.getId();
+        String unverDigest = unverifiedAssessment.getCandidateContentDigest();
         assertThatThrownBy(() -> assessmentWorkflowService.approveCandidate(
-                floatAsmtId, 1, floatDigest, "planner-001", "Attempted illegal approval"
+                unverAsmtId, 1, unverDigest, "planner-001", "Attempted approval of unverified stacking"
         )).isInstanceOf(IllegalStateException.class)
           .hasMessageContaining("Assessment cannot be approved in current state: VALIDATION_FAILED");
     }

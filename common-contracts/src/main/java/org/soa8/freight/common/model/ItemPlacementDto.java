@@ -1,13 +1,22 @@
 package org.soa8.freight.common.model;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 public class ItemPlacementDto {
     private String placementId;
     private String cargoItemId;
     private int instanceIndex;
     private String hazardClass;
     private String unNumber;
+    @JsonProperty("xMm")
+    @JsonAlias({"xmm", "xMm"})
     private int xMm;
+    @JsonProperty("yMm")
+    @JsonAlias({"ymm", "yMm"})
     private int yMm;
+    @JsonProperty("zMm")
+    @JsonAlias({"zmm", "zMm"})
     private int zMm;
     private int lengthMm;
     private int widthMm;
@@ -20,10 +29,15 @@ public class ItemPlacementDto {
     public ItemPlacementDto() {
     }
 
+    /**
+     * @deprecated Legacy constructor without explicit stacking metadata. Defaults stackable to false for safety.
+     * Use {@link #ItemPlacementDto(String, String, int, String, String, int, int, int, int, int, int, double, String, Boolean, Double)} instead.
+     */
+    @Deprecated
     public ItemPlacementDto(String placementId, String cargoItemId, int instanceIndex, String hazardClass,
                             String unNumber, int xMm, int yMm, int zMm, int lengthMm, int widthMm,
                             int heightMm, double weightKg, String orientation) {
-        this(placementId, cargoItemId, instanceIndex, hazardClass, unNumber, xMm, yMm, zMm, lengthMm, widthMm, heightMm, weightKg, orientation, true, null);
+        this(placementId, cargoItemId, instanceIndex, hazardClass, unNumber, xMm, yMm, zMm, lengthMm, widthMm, heightMm, weightKg, orientation, false, null);
     }
 
     public ItemPlacementDto(String placementId, String cargoItemId, int instanceIndex, String hazardClass,
@@ -86,7 +100,7 @@ public class ItemPlacementDto {
     public void setOrientation(String orientation) { this.orientation = orientation; }
 
     public Boolean getStackable() { return stackable; }
-    public boolean isStackable() { return stackable == null || stackable; }
+    public boolean isStackable() { return Boolean.TRUE.equals(stackable); }
     public void setStackable(Boolean stackable) { this.stackable = stackable; }
 
     public Double getMaxStackWeightKg() { return maxStackWeightKg; }

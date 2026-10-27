@@ -49,7 +49,9 @@ public class ControlledOptimizerStub {
                             item.getWidthMm(),
                             item.getHeightMm(),
                             item.getWeightKg(),
-                            "DEFAULT"
+                            "DEFAULT",
+                            item.isStackable(),
+                            item.getMaxStackWeightKg()
                     ));
                     // Advance along X axis with spacing
                     currentX += item.getLengthMm() + 100;
