@@ -384,3 +384,40 @@ def test_cpsat_diagonal_euclidean_hazard_segregation():
     dist = ((c1[0]-c2[0])**2 + (c1[1]-c2[1])**2 + (c1[2]-c2[2])**2)**0.5
     assert dist >= 1500
 
+def test_placement_reward_mathematically_dominates_penalty():
+    # Test with maximal compartment dimensions (12000 x 2500 x 3000)
+    # Placing an item at the furthest rear top corner (11000, 1500, 2000)
+    # has a position penalty of 2000*100 + 11000*2 + 1500*1 = 223,500.
+    # The placement reward is 10,000,000.
+    # Because 10,000,000 >> 223,500, the solver MUST place the unit rather than omitting it
+    # to avoid the position penalty.
+    cmd = {
+        "commandId": "cmd-dominance",
+        "jobId": "job-dominance",
+        "attemptId": "att-1",
+        "timeLimitSeconds": 10,
+        "compartment": {
+            "compartmentId": "comp-large",
+            "lengthMm": 12000,
+            "widthMm": 2500,
+            "heightMm": 3000,
+            "maxPayloadKg": 25000.0
+        },
+        "items": [
+            {
+                "cargoItemId": "item-far",
+                "lengthMm": 1000,
+                "widthMm": 1000,
+                "heightMm": 1000,
+                "weightKg": 500.0,
+                "quantity": 1
+            }
+        ]
+    }
+    res = solve_cpsat_cargo(cmd, force_cpsat=True)
+    # Solver must place the item, achieving optimal status and non-negative net objective
+    assert len(res["placements"]) == 1
+    assert res["solverStatus"] == "OPTIMAL"
+    assert res["evaluation"]["scalarObjective"] > 9_000_000
+    assert res["evaluation"]["unitsPlaced"] == 1
+

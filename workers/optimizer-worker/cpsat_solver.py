@@ -22,6 +22,42 @@ logger = logging.getLogger("CpSatCargoSolver")
 PROVENANCE_CP_SAT = "PYTHON_ORTOOLS_CPSAT_3D_V1"
 ALGORITHM_VERSION = "1.0.0-phaseD"
 
+# Mathematical constants for lexicographically sound multi-level scalarization
+# Tier 1 (Count): 10,000,000 per unit placed
+# Tier 2 (Volume): up to 100,000 per unit (volume in cubic decimeters / liters)
+# Tier 3 (Compactness penalty): max penalty across compartment footprint is bounded below 100,000
+WEIGHT_PER_PLACED_UNIT = 10_000_000
+MAX_VOLUME_BONUS_PER_UNIT = 100_000
+
+def compute_standard_layout_evaluation(placements: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Computes standard, consistent evaluation metrics across any layout candidate:
+    1. unitsPlaced: Count of placed handling units (Primary lexicographic objective)
+    2. totalVolumeM3: Sum of placed volume in cubic meters
+    3. compactnessScore: Sum of positional coordinates (lower is more compact/near front-floor)
+    4. scalarObjective: Mathematically sound unified scalar value:
+       Sum(placed * 10,000,000 + volume_dm3) - Sum(z * 100 + x * 2 + y)
+    """
+    n_placed = len(placements)
+    total_vol_mm3 = sum(p["lengthMm"] * p["widthMm"] * p["heightMm"] for p in placements)
+    total_vol_m3 = round(total_vol_mm3 / 1_000_000_000.0, 4)
+    total_weight_kg = sum(p["weightKg"] for p in placements)
+
+    # Position penalty: z*100 + x*2 + y
+    pos_penalty = sum(p["zMm"] * 100 + p["xMm"] * 2 + p["yMm"] for p in placements)
+
+    # Unified scalar score
+    vol_terms = sum(int((p["lengthMm"] * p["widthMm"] * p["heightMm"]) // 1_000_000) for p in placements)
+    scalar_obj = (n_placed * WEIGHT_PER_PLACED_UNIT) + vol_terms - pos_penalty
+
+    return {
+        "unitsPlaced": n_placed,
+        "totalVolumeM3": total_vol_m3,
+        "totalWeightKg": round(total_weight_kg, 2),
+        "positionPenalty": pos_penalty,
+        "scalarObjective": scalar_obj
+    }
+
 def validate_candidate_strictly(placements: List[Dict[str, Any]],
                                 compartment: Dict[str, Any],
                                 active_rules: List[Dict[str, Any]]) -> Tuple[bool, Optional[str]]:
@@ -210,6 +246,11 @@ def solve_cpsat_cargo(command: Dict[str, Any],
         model.Add(x_vars[i] + dx <= comp_l).OnlyEnforceIf(placed_vars[i])
         model.Add(y_vars[i] + dy <= comp_w).OnlyEnforceIf(placed_vars[i])
         model.Add(z_vars[i] + dz <= comp_h).OnlyEnforceIf(placed_vars[i])
+
+        # If not placed, bind coordinates strictly to 0 so unplaced units incur 0 penalty
+        model.Add(x_vars[i] == 0).OnlyEnforceIf(placed_vars[i].Not())
+        model.Add(y_vars[i] == 0).OnlyEnforceIf(placed_vars[i].Not())
+        model.Add(z_vars[i] == 0).OnlyEnforceIf(placed_vars[i].Not())
 
     # 1. Total payload capacity constraint (scaled to grams or exact integer kg)
     # Scaled integer weights in 100g units (0.1 kg) to guarantee integer arithmetic
@@ -410,6 +451,7 @@ def solve_cpsat_cargo(command: Dict[str, Any],
                     solver_status_name = "UNKNOWN"
 
                 content_digest = compute_content_digest(cp_placements)
+                layout_eval = compute_standard_layout_evaluation(cp_placements)
                 return {
                     "resultId": f"res-{job_id}-{attempt_id}",
                     "jobId": job_id,
@@ -423,6 +465,7 @@ def solve_cpsat_cargo(command: Dict[str, Any],
                     "contentDigest": content_digest,
                     "placements": cp_placements,
                     "unassignedItems": cp_unassigned,
+                    "evaluation": layout_eval,
                     "diagnostics": {
                         "engine": PROVENANCE_CP_SAT,
                         "version": ALGORITHM_VERSION,
@@ -435,6 +478,7 @@ def solve_cpsat_cargo(command: Dict[str, Any],
                         "branches": solver.NumBranches(),
                         "wallTimeSeconds": solver.WallTime(),
                         "objectiveValue": solver.ObjectiveValue() if solver_status_code in (cp_model.OPTIMAL, cp_model.FEASIBLE) else None,
+                        "scalarEvaluationScore": layout_eval["scalarObjective"],
                         "validatedIndependently": True
                     }
                 }

@@ -17,7 +17,7 @@ import logging
 from typing import Dict, Any, List
 
 from heuristic_solver import solve_3d_packing as solve_heuristic
-from cpsat_solver import solve_cpsat_cargo, validate_candidate_strictly
+from cpsat_solver import solve_cpsat_cargo, validate_candidate_strictly, compute_standard_layout_evaluation
 
 # Configure quiet logging
 logging.basicConfig(level=logging.WARNING)
@@ -178,18 +178,19 @@ def run_benchmarks():
         h_res = solve_heuristic(cmd)
         t_h_ms = round((time.perf_counter() - t0) * 1000, 2)
         h_valid, h_err = validate_candidate_strictly(h_res.get("placements", []), comp, rules)
-        h_obj = sum(10000000 + int((p["lengthMm"]*p["widthMm"]*p["heightMm"])//1000000) for p in h_res.get("placements", []))
+        h_eval = compute_standard_layout_evaluation(h_res.get("placements", []))
+        h_obj_str = str(int(h_eval["scalarObjective"]))
         
         print(f"{name:<34} | {'HEURISTIC':<10} | {h_res.get('solverStatus', 'N/A'):<9} | "
-              f"{len(h_res.get('placements', [])):<7} | {t_h_ms:<9} | {h_obj:<12} | {str(h_valid):<6} | {h_res.get('provenance')}")
+              f"{len(h_res.get('placements', [])):<7} | {t_h_ms:<9} | {h_obj_str:<12} | {str(h_valid):<6} | {h_res.get('provenance')}")
 
         # 2. Run Google OR-Tools CP-SAT Pipeline
         t0 = time.perf_counter()
         cp_res = solve_cpsat_cargo(cmd, force_cpsat=True)
         t_cp_ms = round((time.perf_counter() - t0) * 1000, 2)
         cp_valid, cp_err = validate_candidate_strictly(cp_res.get("placements", []), comp, rules)
-        cp_obj = cp_res.get("diagnostics", {}).get("objectiveValue")
-        cp_obj_str = str(int(cp_obj)) if cp_obj is not None else "N/A"
+        cp_eval = compute_standard_layout_evaluation(cp_res.get("placements", []))
+        cp_obj_str = str(int(cp_eval["scalarObjective"]))
 
         print(f"{'':<34} | {'CP-SAT':<10} | {cp_res.get('solverStatus', 'N/A'):<9} | "
               f"{len(cp_res.get('placements', [])):<7} | {t_cp_ms:<9} | {cp_obj_str:<12} | {str(cp_valid):<6} | {cp_res.get('provenance')}")
@@ -201,7 +202,9 @@ def run_benchmarks():
                 "status": h_res.get("solverStatus"),
                 "placed": len(h_res.get("placements", [])),
                 "time_ms": t_h_ms,
-                "objective": h_obj,
+                "scalarObjective": h_eval["scalarObjective"],
+                "positionPenalty": h_eval["positionPenalty"],
+                "totalVolumeM3": h_eval["totalVolumeM3"],
                 "valid": h_valid,
                 "provenance": h_res.get("provenance")
             },
@@ -209,7 +212,9 @@ def run_benchmarks():
                 "status": cp_res.get("solverStatus"),
                 "placed": len(cp_res.get("placements", [])),
                 "time_ms": t_cp_ms,
-                "objective": cp_obj,
+                "scalarObjective": cp_eval["scalarObjective"],
+                "positionPenalty": cp_eval["positionPenalty"],
+                "totalVolumeM3": cp_eval["totalVolumeM3"],
                 "valid": cp_valid,
                 "provenance": cp_res.get("provenance")
             }
