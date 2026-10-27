@@ -263,20 +263,42 @@ def solve_cpsat_cargo(command: Dict[str, Any],
                         elif seg_type == "SEPARATED_BY_DISTANCE":
                             min_dist = int(rule.get("minDistanceMm", 0))
                             if min_dist > 0:
-                                # Safe bounding separation: Manhattan / axis separation bounding Euclidean
-                                # In 3D: (cxa - cxb)^2 + (cya - cyb)^2 + (cza - czb)^2 >= min_dist^2
-                                # Formulated as axis-aligned safe separation distance:
-                                sep_x_far1 = model.NewBoolVar(f"haz_x1_{i}_{j}")
-                                sep_x_far2 = model.NewBoolVar(f"haz_x2_{i}_{j}")
-                                sep_y_far1 = model.NewBoolVar(f"haz_y1_{i}_{j}")
-                                sep_y_far2 = model.NewBoolVar(f"haz_y2_{i}_{j}")
+                                # Parity with IndependentValidator: 3D Euclidean center-to-center distance
+                                # (cxa - cxb)^2 + (cya - cyb)^2 + (cza - czb)^2 >= min_dist^2
+                                # Center coordinate multiplied by 2: double_cx = 2 * x + dx
+                                double_cx_i = model.NewIntVar(0, 2 * comp_l + 10000, f"dcx_{i}_{j}")
+                                double_cy_i = model.NewIntVar(0, 2 * comp_w + 10000, f"dcy_{i}_{j}")
+                                double_cz_i = model.NewIntVar(0, 2 * comp_h + 10000, f"dcz_{i}_{j}")
+                                double_cx_j = model.NewIntVar(0, 2 * comp_l + 10000, f"dcx_{j}_{i}")
+                                double_cy_j = model.NewIntVar(0, 2 * comp_w + 10000, f"dcy_{j}_{i}")
+                                double_cz_j = model.NewIntVar(0, 2 * comp_h + 10000, f"dcz_{j}_{i}")
 
-                                model.Add(x_vars[i] + dx_vars[i] + min_dist <= x_vars[j]).OnlyEnforceIf(sep_x_far1)
-                                model.Add(x_vars[j] + dx_vars[j] + min_dist <= x_vars[i]).OnlyEnforceIf(sep_x_far2)
-                                model.Add(y_vars[i] + dy_vars[i] + min_dist <= y_vars[j]).OnlyEnforceIf(sep_y_far1)
-                                model.Add(y_vars[j] + dy_vars[j] + min_dist <= y_vars[i]).OnlyEnforceIf(sep_y_far2)
+                                model.Add(double_cx_i == 2 * x_vars[i] + dx_vars[i])
+                                model.Add(double_cy_i == 2 * y_vars[i] + dy_vars[i])
+                                model.Add(double_cz_i == 2 * z_vars[i] + dz_vars[i])
+                                model.Add(double_cx_j == 2 * x_vars[j] + dx_vars[j])
+                                model.Add(double_cy_j == 2 * y_vars[j] + dy_vars[j])
+                                model.Add(double_cz_j == 2 * z_vars[j] + dz_vars[j])
 
-                                model.AddBoolOr([sep_x_far1, sep_x_far2, sep_y_far1, sep_y_far2]).OnlyEnforceIf([placed_vars[i], placed_vars[j]])
+                                diff_x = model.NewIntVar(-2 * comp_l - 10000, 2 * comp_l + 10000, f"diff_x_{i}_{j}")
+                                diff_y = model.NewIntVar(-2 * comp_w - 10000, 2 * comp_w + 10000, f"diff_y_{i}_{j}")
+                                diff_z = model.NewIntVar(-2 * comp_h - 10000, 2 * comp_h + 10000, f"diff_z_{i}_{j}")
+
+                                model.Add(diff_x == double_cx_i - double_cx_j)
+                                model.Add(diff_y == double_cy_i - double_cy_j)
+                                model.Add(diff_z == double_cz_i - double_cz_j)
+
+                                diff_x_sq = model.NewIntVar(0, (2 * comp_l + 10000)**2, f"diff_x_sq_{i}_{j}")
+                                diff_y_sq = model.NewIntVar(0, (2 * comp_w + 10000)**2, f"diff_y_sq_{i}_{j}")
+                                diff_z_sq = model.NewIntVar(0, (2 * comp_h + 10000)**2, f"diff_z_sq_{i}_{j}")
+
+                                model.AddMultiplicationEquality(diff_x_sq, [diff_x, diff_x])
+                                model.AddMultiplicationEquality(diff_y_sq, [diff_y, diff_y])
+                                model.AddMultiplicationEquality(diff_z_sq, [diff_z, diff_z])
+
+                                # 4 * (cxa - cxb)^2 >= 4 * min_dist^2
+                                four_min_dist_sq = 4 * min_dist * min_dist
+                                model.Add(diff_x_sq + diff_y_sq + diff_z_sq >= four_min_dist_sq).OnlyEnforceIf([placed_vars[i], placed_vars[j]])
 
     # 4. Stacking capability fail-closed restriction:
     # If a unit is non-stackable or has unknown capability, no other unit can be placed directly above it
@@ -377,8 +399,14 @@ def solve_cpsat_cargo(command: Dict[str, Any],
         if is_valid:
             # Check if CP-SAT solution is at least as good as heuristic incumbent
             if len(cp_placements) >= len(h_placements):
-                solver_status_name = "OPTIMAL" if solver_status_code == cp_model.OPTIMAL and len(cp_unassigned) == 0 else "FEASIBLE"
-                if not cp_placements and physical_units:
+                # When CP-SAT proves optimality for the bounded model, report OPTIMAL.
+                # A partial placement where the remaining units could not fit is mathematically optimal
+                # for the encoded packing model. If solver did not prove optimality (e.g. FEASIBLE incumbent), report FEASIBLE.
+                if solver_status_code == cp_model.OPTIMAL and len(cp_placements) > 0:
+                    solver_status_name = "OPTIMAL"
+                elif cp_placements:
+                    solver_status_name = "FEASIBLE"
+                else:
                     solver_status_name = "UNKNOWN"
 
                 content_digest = compute_content_digest(cp_placements)
@@ -400,11 +428,13 @@ def solve_cpsat_cargo(command: Dict[str, Any],
                         "version": ALGORITHM_VERSION,
                         "ortoolsVersion": "9.10.4067",
                         "cpSatStatus": solver.StatusName(solver_status_code),
+                        "modelOptimalityProven": solver_status_code == cp_model.OPTIMAL,
                         "unitsTotal": n,
                         "unitsPlaced": len(cp_placements),
                         "unitsUnassigned": len(cp_unassigned),
                         "branches": solver.NumBranches(),
                         "wallTimeSeconds": solver.WallTime(),
+                        "objectiveValue": solver.ObjectiveValue() if solver_status_code in (cp_model.OPTIMAL, cp_model.FEASIBLE) else None,
                         "validatedIndependently": True
                     }
                 }

@@ -311,3 +311,76 @@ def test_cpsat_preserves_heuristic_incumbent_on_timeout():
     # Must preserve valid candidate even when CP-SAT search concludes or times out
     assert res["solverStatus"] in ("OPTIMAL", "FEASIBLE", "UNKNOWN")
     assert len(res["placements"]) > 0
+
+def test_cpsat_proven_optimal_partial_placement():
+    # 3 units requested, only 2 physically fit in 2000x1000 compartment
+    cmd = {
+        "commandId": "cmd-partial-opt",
+        "jobId": "job-partial-opt",
+        "attemptId": "att-1",
+        "timeLimitSeconds": 10,
+        "compartment": {
+            "compartmentId": "comp-part",
+            "lengthMm": 2000,
+            "widthMm": 1000,
+            "heightMm": 1000,
+            "maxPayloadKg": 5000.0
+        },
+        "items": [
+            {"cargoItemId": "box-1", "lengthMm": 1000, "widthMm": 1000, "heightMm": 1000, "weightKg": 100.0, "quantity": 1},
+            {"cargoItemId": "box-2", "lengthMm": 1000, "widthMm": 1000, "heightMm": 1000, "weightKg": 100.0, "quantity": 1},
+            {"cargoItemId": "box-3", "lengthMm": 1000, "widthMm": 1000, "heightMm": 1000, "weightKg": 100.0, "quantity": 1}
+        ]
+    }
+    res = solve_cpsat_cargo(cmd, force_cpsat=True)
+    # CP-SAT proves that 2 is the maximum possible placement, so solverStatus is OPTIMAL
+    assert res["solverStatus"] == "OPTIMAL"
+    assert len(res["placements"]) == 2
+    assert len(res["unassignedItems"]) == 1
+    assert res["unassignedItems"][0]["reasonCode"] == "OPTIMIZATION_BOUND_OR_CAPACITY"
+    assert res["diagnostics"]["modelOptimalityProven"] is True
+
+def test_cpsat_diagonal_euclidean_hazard_segregation():
+    # Compartment 2200 x 2200. Min separation distance 1500 mm.
+    # Axis-aligned projection alone would require 1000 + 1500 + 1000 = 3500 mm (would fit only 1).
+    # But diagonal placement center distance is sqrt((1200)^2 + (1200)^2) = 1697 mm >= 1500 mm.
+    # True 3D Euclidean constraint allows both items to be co-loaded safely.
+    cmd = {
+        "commandId": "cmd-diag",
+        "jobId": "job-diag",
+        "attemptId": "att-1",
+        "timeLimitSeconds": 10,
+        "compartment": {
+            "compartmentId": "comp-diag",
+            "lengthMm": 2200,
+            "widthMm": 2200,
+            "heightMm": 1000,
+            "maxPayloadKg": 5000.0
+        },
+        "ruleSnapshot": {
+            "rules": [
+                {
+                    "ruleId": "r-sep",
+                    "ruleCode": "SEP-3-8",
+                    "primaryHazardClass": "3",
+                    "secondaryHazardClass": "8",
+                    "segregationType": "SEPARATED_BY_DISTANCE",
+                    "minDistanceMm": 1500
+                }
+            ]
+        },
+        "items": [
+            {"cargoItemId": "flam", "hazardClass": "3", "lengthMm": 1000, "widthMm": 1000, "heightMm": 1000, "weightKg": 100.0, "quantity": 1},
+            {"cargoItemId": "corr", "hazardClass": "8", "lengthMm": 1000, "widthMm": 1000, "heightMm": 1000, "weightKg": 100.0, "quantity": 1}
+        ]
+    }
+    res = solve_cpsat_cargo(cmd, force_cpsat=True)
+    assert len(res["placements"]) == 2
+    # Verify strict revalidation passes with 3D Euclidean distance
+    p1 = res["placements"][0]
+    p2 = res["placements"][1]
+    c1 = (p1["xMm"] + p1["lengthMm"]/2, p1["yMm"] + p1["widthMm"]/2, p1["zMm"] + p1["heightMm"]/2)
+    c2 = (p2["xMm"] + p2["lengthMm"]/2, p2["yMm"] + p2["widthMm"]/2, p2["zMm"] + p2["heightMm"]/2)
+    dist = ((c1[0]-c2[0])**2 + (c1[1]-c2[1])**2 + (c1[2]-c2[2])**2)**0.5
+    assert dist >= 1500
+

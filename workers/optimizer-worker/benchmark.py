@@ -143,13 +143,27 @@ BENCHMARK_SCENARIOS: List[Dict[str, Any]] = [
                 {"cargoItemId": "crate-B", "lengthMm": 1000, "widthMm": 1000, "heightMm": 800, "weightKg": 200.0, "quantity": 6, "stackable": True}
             ]
         }
+    },
+    {
+        "name": "9. Larger Synthetic Scale (24 items bounded packing)",
+        "command": {
+            "jobId": "bench-9",
+            "attemptId": "att-1",
+            "timeLimitSeconds": 4,
+            "compartment": {"compartmentId": "c1", "lengthMm": 12000, "widthMm": 2400, "heightMm": 2400, "maxPayloadKg": 25000.0},
+            "ruleSnapshot": {"rules": []},
+            "items": [
+                {"cargoItemId": "pallet-1", "lengthMm": 1200, "widthMm": 800, "heightMm": 1000, "weightKg": 300.0, "quantity": 12, "stackable": True},
+                {"cargoItemId": "pallet-2", "lengthMm": 1000, "widthMm": 1000, "heightMm": 900, "weightKg": 250.0, "quantity": 12, "stackable": True}
+            ]
+        }
     }
 ]
 
 def run_benchmarks():
-    print("=" * 110)
-    print(f"{'SCENARIO':<32} | {'SOLVER':<10} | {'STATUS':<9} | {'PLACED':<7} | {'TIME(ms)':<9} | {'VALID':<6} | {'REASON / PROVENANCE'}")
-    print("=" * 110)
+    print("=" * 125)
+    print(f"{'SCENARIO':<34} | {'SOLVER':<10} | {'STATUS':<9} | {'PLACED':<7} | {'TIME(ms)':<9} | {'OBJECTIVE':<12} | {'VALID':<6} | {'PROVENANCE'}")
+    print("=" * 125)
 
     results = []
 
@@ -164,19 +178,22 @@ def run_benchmarks():
         h_res = solve_heuristic(cmd)
         t_h_ms = round((time.perf_counter() - t0) * 1000, 2)
         h_valid, h_err = validate_candidate_strictly(h_res.get("placements", []), comp, rules)
+        h_obj = sum(10000000 + int((p["lengthMm"]*p["widthMm"]*p["heightMm"])//1000000) for p in h_res.get("placements", []))
         
-        print(f"{name:<32} | {'HEURISTIC':<10} | {h_res.get('solverStatus', 'N/A'):<9} | "
-              f"{len(h_res.get('placements', [])):<7} | {t_h_ms:<9} | {str(h_valid):<6} | {h_res.get('provenance')}")
+        print(f"{name:<34} | {'HEURISTIC':<10} | {h_res.get('solverStatus', 'N/A'):<9} | "
+              f"{len(h_res.get('placements', [])):<7} | {t_h_ms:<9} | {h_obj:<12} | {str(h_valid):<6} | {h_res.get('provenance')}")
 
         # 2. Run Google OR-Tools CP-SAT Pipeline
         t0 = time.perf_counter()
         cp_res = solve_cpsat_cargo(cmd, force_cpsat=True)
         t_cp_ms = round((time.perf_counter() - t0) * 1000, 2)
         cp_valid, cp_err = validate_candidate_strictly(cp_res.get("placements", []), comp, rules)
+        cp_obj = cp_res.get("diagnostics", {}).get("objectiveValue")
+        cp_obj_str = str(int(cp_obj)) if cp_obj is not None else "N/A"
 
-        print(f"{'':<32} | {'CP-SAT':<10} | {cp_res.get('solverStatus', 'N/A'):<9} | "
-              f"{len(cp_res.get('placements', [])):<7} | {t_cp_ms:<9} | {str(cp_valid):<6} | {cp_res.get('provenance')}")
-        print("-" * 110)
+        print(f"{'':<34} | {'CP-SAT':<10} | {cp_res.get('solverStatus', 'N/A'):<9} | "
+              f"{len(cp_res.get('placements', [])):<7} | {t_cp_ms:<9} | {cp_obj_str:<12} | {str(cp_valid):<6} | {cp_res.get('provenance')}")
+        print("-" * 125)
 
         results.append({
             "scenario": name,
@@ -184,6 +201,7 @@ def run_benchmarks():
                 "status": h_res.get("solverStatus"),
                 "placed": len(h_res.get("placements", [])),
                 "time_ms": t_h_ms,
+                "objective": h_obj,
                 "valid": h_valid,
                 "provenance": h_res.get("provenance")
             },
@@ -191,6 +209,7 @@ def run_benchmarks():
                 "status": cp_res.get("solverStatus"),
                 "placed": len(cp_res.get("placements", [])),
                 "time_ms": t_cp_ms,
+                "objective": cp_obj,
                 "valid": cp_valid,
                 "provenance": cp_res.get("provenance")
             }
