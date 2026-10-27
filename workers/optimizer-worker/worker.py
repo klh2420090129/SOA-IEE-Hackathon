@@ -8,6 +8,7 @@ from typing import Dict, Any
 
 from kafka import KafkaConsumer, KafkaProducer
 from heuristic_solver import solve_3d_packing
+from cpsat_solver import solve_cpsat_cargo
 from dedup_store import WorkerDeduplicationStore
 
 logging.basicConfig(
@@ -124,8 +125,8 @@ def run_worker():
                             consumer.commit()
                             continue
 
-                    # Execute deterministic packing heuristic
-                    result = solve_3d_packing(command)
+                    # Execute bounded optimization pipeline (CP-SAT with heuristic baseline & fallback)
+                    result = solve_cpsat_cargo(command)
                     result_id = result.get("resultId")
 
                     # Step 1: Dispatch result to RESULT_TOPIC keyed by jobId with durable acknowledgment
