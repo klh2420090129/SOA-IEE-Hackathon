@@ -6,6 +6,7 @@ import org.soa8.freight.common.constants.EventTopics;
 import org.soa8.freight.common.events.CargoLoadRejectedPayload;
 import org.soa8.freight.common.events.DomainEvent;
 import org.soa8.freight.common.model.*;
+import org.soa8.freight.common.util.CandidateDigestUtils;
 import org.soa8.freight.common.util.DigestUtils;
 import org.soa8.freight.compartment.model.AssessmentEntity;
 import org.soa8.freight.compartment.model.CandidateLayoutEntity;
@@ -214,16 +215,41 @@ public class AssessmentWorkflowService {
             throw new IllegalStateException("Candidate digest mismatch. Layout has changed since inspection.");
         }
 
-        // Verification of candidate layout and unassigned cargo policy:
-        if (assessment.getCandidateLayoutId() != null) {
-            CandidateLayoutEntity layoutEntity = layoutRepository.findById(assessment.getCandidateLayoutId()).orElse(null);
-            if (layoutEntity != null) {
-                String status = layoutEntity.getSolverStatus();
-                // If solver status is INFEASIBLE, TIMEOUT, or UNKNOWN, candidate cannot be approved
-                if ("INFEASIBLE".equalsIgnoreCase(status) || "TIMEOUT".equalsIgnoreCase(status) || "UNKNOWN".equalsIgnoreCase(status)) {
-                    throw new IllegalStateException("Cannot approve candidate layout with unresolved solver status: " + status);
-                }
+        // Verification of authoritative persisted candidate layout and integrity
+        if (assessment.getCandidateLayoutId() == null) {
+            throw new IllegalStateException("Assessment does not have an authoritative candidate layout to approve");
+        }
+        CandidateLayoutEntity layoutEntity = layoutRepository.findById(assessment.getCandidateLayoutId())
+                .orElseThrow(() -> new IllegalStateException("Authoritative candidate layout not found: " + assessment.getCandidateLayoutId()));
+
+        if (layoutEntity.getLayoutVersion() != expectedLayoutVersion) {
+            throw new IllegalStateException("Authoritative layout version [" + layoutEntity.getLayoutVersion()
+                    + "] does not match expected layout version [" + expectedLayoutVersion + "]");
+        }
+
+        if (!layoutEntity.getContentDigest().equals(assessment.getCandidateContentDigest())) {
+            throw new IllegalStateException("Authoritative layout digest mismatch between layout entity and assessment record");
+        }
+
+        // Re-verify canonical digest over persisted placements to prevent silent DB corruption or out-of-band tampering
+        try {
+            List<ItemPlacementDto> persistedPlacements = objectMapper.readValue(
+                    layoutEntity.getPlacementsJson(),
+                    objectMapper.getTypeFactory().constructCollectionType(List.class, ItemPlacementDto.class)
+            );
+            String computedPersistedDigest = CandidateDigestUtils.computeCanonicalDigest(persistedPlacements);
+            if (!computedPersistedDigest.equals(layoutEntity.getContentDigest())) {
+                throw new IllegalStateException("Authoritative layout placements have been mutated; computed canonical digest ["
+                        + computedPersistedDigest + "] does not match persisted digest [" + layoutEntity.getContentDigest() + "]");
             }
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Failed to deserialize authoritative placements for approval integrity check", e);
+        }
+
+        String status = layoutEntity.getSolverStatus();
+        // If solver status is INFEASIBLE, TIMEOUT, or UNKNOWN, candidate cannot be approved
+        if ("INFEASIBLE".equalsIgnoreCase(status) || "TIMEOUT".equalsIgnoreCase(status) || "UNKNOWN".equalsIgnoreCase(status)) {
+            throw new IllegalStateException("Cannot approve candidate layout with unresolved solver status: " + status);
         }
 
         assessment.setApprovalDecision("APPROVED");

@@ -27,6 +27,12 @@ class CompartmentAssessmentWorkflowTest {
     @Autowired
     private OutboxEventRepository outboxEventRepository;
 
+    @Autowired
+    private org.soa8.freight.compartment.repository.CandidateLayoutRepository layoutRepository;
+
+    @Autowired
+    private com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+
     @org.springframework.boot.test.mock.mockito.MockBean
     private org.soa8.freight.compartment.client.ValidationServiceClient validationClient;
 
@@ -317,5 +323,90 @@ class CompartmentAssessmentWorkflowTest {
         assertThatThrownBy(() -> workflowService.recordCandidateLayout(assessment.getId(), candidate))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("Candidate contentDigest mismatch");
+    }
+
+    @Test
+    void shouldRejectApprovalWhenCandidatePlacementsAreMutatedAfterValidation() {
+        CompartmentDto comp = new CompartmentDto("comp-mut", "Standard Trailer", 12000, 2400, 2600, 25000);
+        AssessmentEntity assessment = workflowService.createAssessment("decl-mut", 1, "snap-mut", comp);
+
+        ItemPlacementDto item = new ItemPlacementDto("pl-m1", "item-m1", 1, "3", "UN1203", 0, 0, 0, 1000, 1000, 1000, 500, "DEFAULT", false, 0.0);
+        CandidateLayoutDto candidate = new CandidateLayoutDto(
+                "layout-mut", 1, "comp-mut", null, "FEASIBLE", "HEURISTIC_EP_3D_V1", List.of(item)
+        );
+        AssessmentEntity ready = workflowService.recordCandidateLayout(assessment.getId(), candidate);
+        String originalDigest = ready.getCandidateContentDigest();
+
+        // Perform valid authoritative validation
+        ValidationResultDto val = new ValidationResultDto("val-mut-001", true, "1.0.0", 1, Collections.emptyList());
+        val.setCandidateLayoutId("layout-mut");
+        val.setCandidateLayoutVersion(1);
+        val.setCandidateContentDigest(originalDigest);
+        val.setRuleSnapshotId("snap-mut");
+        org.mockito.Mockito.when(validationClient.getValidationRun("val-mut-001")).thenReturn(java.util.Optional.of(val));
+
+        AssessmentEntity validated = workflowService.recordValidationOutcome(assessment.getId(), val);
+        assertThat(validated.getWorkflowStatus()).isEqualTo("PENDING_APPROVAL");
+
+        // Now mutate the underlying candidate layout (simulate out-of-band DB mutation or direct alteration)
+        org.soa8.freight.compartment.model.CandidateLayoutEntity layoutEntity =
+                layoutRepository.findById("layout-mut").orElseThrow();
+        // Change coordinates in the persisted JSON without updating candidateContentDigest
+        ItemPlacementDto mutatedItem = new ItemPlacementDto("pl-m1", "item-m1", 1, "3", "UN1203", 9999, 0, 0, 1000, 1000, 1000, 500, "DEFAULT", false, 0.0);
+        try {
+            layoutEntity.setPlacementsJson(objectMapper.writeValueAsString(List.of(mutatedItem)));
+            layoutRepository.save(layoutEntity);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+
+        // Approval must fail closed because re-computed canonical digest of authoritative placements fails match
+        assertThatThrownBy(() -> workflowService.approveCandidate(
+                assessment.getId(), 1, originalDigest, "planner-1", "attempt approval of mutated layout"
+        )).isInstanceOf(IllegalStateException.class)
+          .hasMessageContaining("Authoritative layout placements have been mutated");
+    }
+
+    @Test
+    void shouldInvalidatePreviousValidationWhenNewCandidateVersionIsRecorded() {
+        CompartmentDto comp = new CompartmentDto("comp-v2", "Standard Trailer", 12000, 2400, 2600, 25000);
+        AssessmentEntity assessment = workflowService.createAssessment("decl-v2", 1, "snap-v2", comp);
+
+        ItemPlacementDto itemV1 = new ItemPlacementDto("pl-v1", "item-1", 1, "3", "UN1203", 0, 0, 0, 1000, 1000, 1000, 500, "DEFAULT", false, 0.0);
+        CandidateLayoutDto candidateV1 = new CandidateLayoutDto(
+                "layout-v1", 1, "comp-v2", null, "FEASIBLE", "HEURISTIC_EP_3D_V1", List.of(itemV1)
+        );
+        AssessmentEntity readyV1 = workflowService.recordCandidateLayout(assessment.getId(), candidateV1);
+
+        // Validate V1
+        ValidationResultDto valV1 = new ValidationResultDto("val-v1-001", true, "1.0.0", 1, Collections.emptyList());
+        valV1.setCandidateLayoutId("layout-v1");
+        valV1.setCandidateLayoutVersion(1);
+        valV1.setCandidateContentDigest(readyV1.getCandidateContentDigest());
+        valV1.setRuleSnapshotId("snap-v2");
+        org.mockito.Mockito.when(validationClient.getValidationRun("val-v1-001")).thenReturn(java.util.Optional.of(valV1));
+
+        AssessmentEntity validatedV1 = workflowService.recordValidationOutcome(assessment.getId(), valV1);
+        assertThat(validatedV1.getWorkflowStatus()).isEqualTo("PENDING_APPROVAL");
+        assertThat(validatedV1.isValidationPassed()).isTrue();
+
+        // Now record candidate layout V2
+        ItemPlacementDto itemV2 = new ItemPlacementDto("pl-v2", "item-1", 1, "3", "UN1203", 500, 0, 0, 1000, 1000, 1000, 500, "DEFAULT", false, 0.0);
+        CandidateLayoutDto candidateV2 = new CandidateLayoutDto(
+                "layout-v2", 2, "comp-v2", null, "FEASIBLE", "HEURISTIC_EP_3D_V1", List.of(itemV2)
+        );
+        AssessmentEntity readyV2 = workflowService.recordCandidateLayout(assessment.getId(), candidateV2);
+
+        // Must drop back to CANDIDATE_READY and wipe prior validation
+        assertThat(readyV2.getWorkflowStatus()).isEqualTo("CANDIDATE_READY");
+        assertThat(readyV2.isValidationPassed()).isFalse();
+        assertThat(readyV2.getValidationId()).isNull();
+        assertThat(readyV2.getCandidateLayoutVersion()).isEqualTo(2);
+
+        // Attempting to approve V2 using old V1 validation must fail (blocked in CANDIDATE_READY state)
+        assertThatThrownBy(() -> workflowService.approveCandidate(
+                assessment.getId(), 2, readyV2.getCandidateContentDigest(), "planner-1", "approve without re-validating V2"
+        )).isInstanceOf(IllegalStateException.class)
+          .hasMessageContaining("Assessment cannot be approved in current state: CANDIDATE_READY");
     }
 }
