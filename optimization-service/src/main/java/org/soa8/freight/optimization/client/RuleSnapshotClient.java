@@ -23,34 +23,48 @@ public class RuleSnapshotClient {
 
     private final RestTemplate restTemplate;
     private final String rulesServiceBaseUrl;
+    private final boolean allowTestFallback;
 
     public RuleSnapshotClient(RestTemplateBuilder builder,
-                              @Value("${services.rules.url:http://localhost:8083}") String rulesServiceBaseUrl) {
+                              @Value("${services.rules.url:http://localhost:8083}") String rulesServiceBaseUrl,
+                              @Value("${optimization.rules.allow-test-fallback:false}") boolean allowTestFallback) {
         this.restTemplate = builder
                 .setConnectTimeout(Duration.ofMillis(1500))
                 .setReadTimeout(Duration.ofMillis(2500))
                 .build();
         this.rulesServiceBaseUrl = rulesServiceBaseUrl;
+        this.allowTestFallback = allowTestFallback;
     }
 
+    /**
+     * Resolve the exact immutable rule snapshot from compatibility-rule-service.
+     * Fails closed if the service is unreachable, snapshot is missing, or returned snapshot ID does not match.
+     */
     public Optional<RuleSnapshotDto> resolveSnapshot(String snapshotId) {
         if (snapshotId == null || snapshotId.isBlank()) {
             return Optional.empty();
         }
 
         try {
-            String url = rulesServiceBaseUrl + "/api/v1/rule-snapshots/" + snapshotId;
+            String url = rulesServiceBaseUrl + "/api/v1/rule-snapshots/" + snapshotId.trim();
             RuleSnapshotDto snapshot = restTemplate.getForObject(url, RuleSnapshotDto.class);
             if (snapshot != null) {
+                // Reject snapshot ID mismatch
+                if (!snapshotId.trim().equalsIgnoreCase(snapshot.getSnapshotId())) {
+                    log.error("Retrieved snapshot ID '{}' does not match requested snapshot ID '{}'. Rejecting for safety.",
+                            snapshot.getSnapshotId(), snapshotId);
+                    return Optional.empty();
+                }
                 return Optional.of(snapshot);
             }
         } catch (Exception e) {
-            log.warn("Could not retrieve rule snapshot '{}' from {}: {}. Falling back to authoritative fallback snapshot.",
+            log.warn("Could not retrieve rule snapshot '{}' from {}: {}.",
                     snapshotId, rulesServiceBaseUrl, e.getMessage());
         }
 
-        // Deterministic authoritative fallback for standard snapshot ID if service is unavailable in standalone tests
-        if ("snap-2026-q4-v1".equalsIgnoreCase(snapshotId)) {
+        // Allow test fallback ONLY when explicitly enabled via configuration (e.g. in test fixtures)
+        if (allowTestFallback && "snap-2026-q4-v1".equalsIgnoreCase(snapshotId)) {
+            log.info("Using explicitly enabled test fallback snapshot for '{}'", snapshotId);
             return Optional.of(getAuthoritativeDefaultSnapshot());
         }
 

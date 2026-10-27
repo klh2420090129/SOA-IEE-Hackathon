@@ -102,6 +102,103 @@ public class IndependentValidator {
             }
         }
 
+        // 4. Stacking and Bottom Support Check
+        for (ItemPlacementDto item : placements) {
+            if (item.getZMm() == 0) {
+                // Ground support: directly resting on compartment floor
+                continue;
+            }
+
+            // Must have qualifying support beneath
+            int x1 = item.getXMm();
+            int y1 = item.getYMm();
+            int x2 = item.getXMm() + item.getLengthMm();
+            int y2 = item.getYMm() + item.getWidthMm();
+            long baseArea = (long) item.getLengthMm() * item.getWidthMm();
+            long supportedArea = 0;
+            List<ItemPlacementDto> supportingItems = new ArrayList<>();
+
+            for (ItemPlacementDto lower : placements) {
+                if (lower.equals(item)) continue;
+                int lowerTop = lower.getZMm() + lower.getHeightMm();
+                if (lowerTop == item.getZMm()) {
+                    int lx1 = lower.getXMm();
+                    int ly1 = lower.getYMm();
+                    int lx2 = lower.getXMm() + lower.getLengthMm();
+                    int ly2 = lower.getYMm() + lower.getWidthMm();
+
+                    int interX = Math.max(0, Math.min(x2, lx2) - Math.max(x1, lx1));
+                    int interY = Math.max(0, Math.min(y2, ly2) - Math.max(y1, ly1));
+                    if (interX > 0 && interY > 0) {
+                        supportedArea += ((long) interX * interY);
+                        supportingItems.add(lower);
+                    }
+                }
+            }
+
+            // Stacking support policy: at least 50% bottom area must be supported
+            if (supportingItems.isEmpty()) {
+                findings.add(new ValidationFindingDto(
+                        "CRITICAL", "UNSUPPORTED_CARGO",
+                        "Item " + item.getCargoItemId() + " at elevation Z=" + item.getZMm() + " has zero bottom support",
+                        List.of(item.getCargoItemId())
+                ));
+            } else if (supportedArea < (baseArea * 0.5)) {
+                findings.add(new ValidationFindingDto(
+                        "CRITICAL", "INSUFFICIENT_SUPPORT",
+                        "Item " + item.getCargoItemId() + " has excessive overhang (supported area " +
+                        (supportedArea * 100 / baseArea) + "% is below required 50%)",
+                        List.of(item.getCargoItemId())
+                ));
+            }
+
+            // Verify supporting items allow stacking and are not overloaded
+            for (ItemPlacementDto supporting : supportingItems) {
+                if (!supporting.isStackable()) {
+                    findings.add(new ValidationFindingDto(
+                            "CRITICAL", "NON_STACKABLE_LOAD_BEARING",
+                            "Supporting item " + supporting.getCargoItemId() + " is non-stackable but carries upper item " + item.getCargoItemId(),
+                            List.of(supporting.getCargoItemId(), item.getCargoItemId())
+                    ));
+                }
+            }
+        }
+
+        // Verify maxStackWeightKg for each base item
+        for (ItemPlacementDto base : placements) {
+            if (base.getMaxStackWeightKg() != null && base.getMaxStackWeightKg() > 0) {
+                double totalStackedWeight = 0;
+                int bx1 = base.getXMm();
+                int by1 = base.getYMm();
+                int bx2 = base.getXMm() + base.getLengthMm();
+                int by2 = base.getYMm() + base.getWidthMm();
+                int bTop = base.getZMm() + base.getHeightMm();
+
+                for (ItemPlacementDto upper : placements) {
+                    if (upper.equals(base)) continue;
+                    if (upper.getZMm() >= bTop) {
+                        int ux1 = upper.getXMm();
+                        int uy1 = upper.getYMm();
+                        int ux2 = upper.getXMm() + upper.getLengthMm();
+                        int uy2 = upper.getYMm() + upper.getWidthMm();
+
+                        if (ux1 < bx2 && ux2 > bx1 && uy1 < by2 && uy2 > by1) {
+                            totalStackedWeight += upper.getWeightKg();
+                        }
+                    }
+                }
+
+                if (totalStackedWeight > base.getMaxStackWeightKg()) {
+                    findings.add(new ValidationFindingDto(
+                            "CRITICAL", "STACK_WEIGHT_LIMIT_EXCEEDED",
+                            "Total weight stacked on item " + base.getCargoItemId() + " (" + totalStackedWeight +
+                            " kg) exceeds maximum permitted stack weight (" + base.getMaxStackWeightKg() + " kg)",
+                            List.of(base.getCargoItemId())
+                    ));
+                }
+            }
+        }
+
         boolean passed = findings.isEmpty();
         return new ValidationResultDto(
                 UUID.randomUUID().toString(),

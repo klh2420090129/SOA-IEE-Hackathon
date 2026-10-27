@@ -23,7 +23,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @SpringBootTest(properties = {
     "eureka.client.enabled=false",
     "optimization.solver.default-time-limit-seconds=20",
-    "optimization.solver.max-time-limit-seconds=30"
+    "optimization.solver.max-time-limit-seconds=30",
+    "optimization.rules.allow-test-fallback=true"
 })
 class OptimizationJobLifecycleTest {
 
@@ -156,5 +157,20 @@ class OptimizationJobLifecycleTest {
         OptimizationJobEntity job = (OptimizationJobEntity) response.getBody();
         assertThat(job.getRuleSnapshotId()).isEqualTo("snap-2026-q4-v1");
         assertThat(job.getTimeLimitSeconds()).isEqualTo(20);
+    }
+
+    @Test
+    @DisplayName("7. Fail closed when requested rule snapshot cannot be resolved")
+    void shouldFailClosedWhenRuleSnapshotCannotBeResolved() {
+        OptimizationController.CreateOptimizationJobRequest req = new OptimizationController.CreateOptimizationJobRequest();
+        req.declarationId = "decl-unknown-snap-001";
+        req.compartment = new CompartmentDto("comp-test-1", "Standard Trailer", 12000, 2400, 2600, 25000);
+        req.items = List.of(new CargoItemDto("it-1", "Drums", "3", "UN1993", 1000, 1000, 1000, 400, true, 800, 1));
+        req.ruleSnapshotId = "non-existent-snap-id-999";
+
+        ResponseEntity<?> response = controller.submitJob(req);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        Map<?, ?> err = (Map<?, ?>) response.getBody();
+        assertThat(err.get("code")).isEqualTo("RULE_SNAPSHOT_UNAVAILABLE");
     }
 }

@@ -14,6 +14,8 @@ public class ItemPlacementDto {
     private int heightMm;
     private double weightKg;
     private String orientation;
+    private Boolean stackable;
+    private Double maxStackWeightKg;
 
     public ItemPlacementDto() {
     }
@@ -21,6 +23,12 @@ public class ItemPlacementDto {
     public ItemPlacementDto(String placementId, String cargoItemId, int instanceIndex, String hazardClass,
                             String unNumber, int xMm, int yMm, int zMm, int lengthMm, int widthMm,
                             int heightMm, double weightKg, String orientation) {
+        this(placementId, cargoItemId, instanceIndex, hazardClass, unNumber, xMm, yMm, zMm, lengthMm, widthMm, heightMm, weightKg, orientation, true, null);
+    }
+
+    public ItemPlacementDto(String placementId, String cargoItemId, int instanceIndex, String hazardClass,
+                            String unNumber, int xMm, int yMm, int zMm, int lengthMm, int widthMm,
+                            int heightMm, double weightKg, String orientation, Boolean stackable, Double maxStackWeightKg) {
         this.placementId = placementId;
         this.cargoItemId = cargoItemId;
         this.instanceIndex = instanceIndex;
@@ -34,6 +42,8 @@ public class ItemPlacementDto {
         this.heightMm = heightMm;
         this.weightKg = weightKg;
         this.orientation = orientation;
+        this.stackable = stackable;
+        this.maxStackWeightKg = maxStackWeightKg;
     }
 
     public String getPlacementId() { return placementId; }
@@ -74,4 +84,11 @@ public class ItemPlacementDto {
 
     public String getOrientation() { return orientation; }
     public void setOrientation(String orientation) { this.orientation = orientation; }
+
+    public Boolean getStackable() { return stackable; }
+    public boolean isStackable() { return stackable == null || stackable; }
+    public void setStackable(Boolean stackable) { this.stackable = stackable; }
+
+    public Double getMaxStackWeightKg() { return maxStackWeightKg; }
+    public void setMaxStackWeightKg(Double maxStackWeightKg) { this.maxStackWeightKg = maxStackWeightKg; }
 }

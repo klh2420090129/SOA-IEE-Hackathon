@@ -226,4 +226,33 @@ class Deterministic3DHeuristicOptimizerTest {
         assertThat(result.getSolverStatus()).isNotEqualTo(SolverStatus.OPTIMAL.name());
         assertThat(result.getSolverStatus()).isEqualTo(SolverStatus.FEASIBLE.name());
     }
+
+    @Test
+    @DisplayName("14. Unplaced items without proof of global infeasibility return UNKNOWN instead of INFEASIBLE")
+    void testUnknownOutcomeWhenPlacementFails() {
+        // Item is larger than the compartment in all dimensions, so 0 units placed
+        CargoItemDto oversized = new CargoItemDto("it-over", "Oversized", "NON_HAZ", "UN0000", 15000, 3000, 3000, 500, true, 500, 1);
+        CandidateLayoutDto result = optimizer.optimize(standardCompartment, List.of(oversized), standardSnapshot, "snap-2026-q4-v1");
+
+        assertThat(result.getPlacements()).isEmpty();
+        assertThat(result.getUnassignedItems()).hasSize(1);
+        assertThat(result.getSolverStatus()).isEqualTo(SolverStatus.UNKNOWN.name());
+        assertThat(result.getSolverStatus()).isNotEqualTo(SolverStatus.INFEASIBLE.name());
+    }
+
+    @Test
+    @DisplayName("15. Partial loading returns FEASIBLE with all physical units accounted for exactly once")
+    void testPartialLoadingReturnsFeasibleWithUnassignedItems() {
+        // Compartment maxPayloadKg is 1000kg. Item weighs 600kg, quantity 2.
+        CompartmentDto compWeight = new CompartmentDto("comp-w", "Low Capacity", 12000, 2400, 2600, 1000.0);
+        CargoItemDto heavyItem = new CargoItemDto("it-heavy", "Heavy", "NON_HAZ", "UN0000", 1000, 1000, 1000, 600.0, true, 800, 2);
+
+        CandidateLayoutDto result = optimizer.optimize(compWeight, List.of(heavyItem), standardSnapshot, "snap-2026-q4-v1");
+        assertThat(result.getSolverStatus()).isEqualTo(SolverStatus.FEASIBLE.name());
+        assertThat(result.getPlacements()).hasSize(1);
+        assertThat(result.getUnassignedItems()).hasSize(1);
+
+        // Conservation check: total input units (2) == placed (1) + unassigned (1)
+        assertThat(result.getPlacements().size() + result.getUnassignedItems().size()).isEqualTo(2);
+    }
 }

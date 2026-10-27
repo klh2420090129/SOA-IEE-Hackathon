@@ -278,7 +278,9 @@ public class Deterministic3DHeuristicOptimizer {
                         best.orientation.widthMm,
                         best.orientation.heightMm,
                         unit.getWeightKg(),
-                        best.orientation.orientationName
+                        best.orientation.orientationName,
+                        unit.isStackable(),
+                        unit.getMaxStackWeightKg()
                 );
                 placedItems.add(placement);
                 currentTotalWeightKg += unit.getWeightKg();
@@ -293,11 +295,13 @@ public class Deterministic3DHeuristicOptimizer {
         // Determine outcome status honestly
         SolverStatus outcomeStatus;
         if (placedItems.isEmpty() && !physicalUnits.isEmpty()) {
-            outcomeStatus = SolverStatus.INFEASIBLE;
-        } else if (!unassignedItems.isEmpty()) {
-            outcomeStatus = SolverStatus.FEASIBLE; // Partial loading achieved
+            // A greedy heuristic cannot prove mathematical infeasibility merely because it placed 0 units.
+            // UNKNOWN accurately reflects that no feasible candidate was found without false optimality or infeasibility claims.
+            outcomeStatus = SolverStatus.UNKNOWN;
         } else {
-            outcomeStatus = SolverStatus.FEASIBLE; // Complete packing found by heuristic (NEVER OPTIMAL)
+            // FEASIBLE represents that a candidate layout was produced (either partial or complete).
+            // A heuristic NEVER emits OPTIMAL.
+            outcomeStatus = SolverStatus.FEASIBLE;
         }
 
         String layoutId = UUID.randomUUID().toString();
@@ -477,12 +481,44 @@ public class Deterministic3DHeuristicOptimizer {
 
                 if (overlapX && overlapY) {
                     // Check if supporting item is stackable
-                    // Note: In ItemPlacementDto, we don't store stackable directly, but we can verify stacking feasibility conservatively
-                    // If weight limit is exceeded or lower is non-stackable, reject
+                    if (!lower.isStackable()) {
+                        return false; // Lower item is non-stackable
+                    }
+
+                    // Check if adding unit's weight exceeds lower's maxStackWeightKg
+                    if (lower.getMaxStackWeightKg() != null && lower.getMaxStackWeightKg() > 0) {
+                        double currentStackedWeight = computeCurrentStackedWeightOn(lower, placedItems);
+                        if (currentStackedWeight + unit.getWeightKg() > lower.getMaxStackWeightKg()) {
+                            return false; // Exceeds lower's maximum permitted stack weight
+                        }
+                    }
                 }
             }
         }
         return true;
+    }
+
+    private double computeCurrentStackedWeightOn(ItemPlacementDto base, List<ItemPlacementDto> placedItems) {
+        double weight = 0.0;
+        int bx1 = base.getXMm();
+        int by1 = base.getYMm();
+        int bx2 = base.getXMm() + base.getLengthMm();
+        int by2 = base.getYMm() + base.getWidthMm();
+        int bTop = base.getZMm() + base.getHeightMm();
+
+        for (ItemPlacementDto item : placedItems) {
+            if (item.getZMm() >= bTop) {
+                int ix1 = item.getXMm();
+                int iy1 = item.getYMm();
+                int ix2 = item.getXMm() + item.getLengthMm();
+                int iy2 = item.getYMm() + item.getWidthMm();
+
+                if (ix1 < bx2 && ix2 > bx1 && iy1 < by2 && iy2 > by1) {
+                    weight += item.getWeightKg();
+                }
+            }
+        }
+        return weight;
     }
 
     private static class SegregationCheckResult {

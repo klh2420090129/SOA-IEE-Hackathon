@@ -103,6 +103,13 @@ public class OptimizationController {
         org.soa8.freight.common.model.RuleSnapshotDto resolvedSnapshot = ruleSnapshotClient.resolveSnapshot(snapshotId)
                 .orElse(null);
 
+        if (resolvedSnapshot == null && !ControlledOptimizerStub.PROVENANCE_STUB.equalsIgnoreCase(req.algorithm)) {
+            return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(Map.of(
+                    "code", "RULE_SNAPSHOT_UNAVAILABLE",
+                    "message", "Mandatory immutable rule snapshot '" + snapshotId + "' is missing, unreviewed, or unavailable. Failing closed."
+            ));
+        }
+
         String jobId = UUID.randomUUID().toString();
         OptimizationJobEntity job = new OptimizationJobEntity(
                 jobId, req.declarationId, req.compartment.getCompartmentId(), snapshotId

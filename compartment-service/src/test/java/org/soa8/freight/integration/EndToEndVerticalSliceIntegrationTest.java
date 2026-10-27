@@ -209,5 +209,25 @@ class EndToEndVerticalSliceIntegrationTest {
         ValidationResultDto hazardRes = validator.validate(hazardLayout, comp, snapshot);
         assertThat(hazardRes.isPassed()).isFalse();
         assertThat(hazardRes.getFindings()).anyMatch(f -> "HAZARD_SEGREGATION_VIOLATION".equals(f.getCode()));
+
+        // Case C: Unsupported Stacking Failure and Approval Blocking
+        ItemPlacementDto floating = new ItemPlacementDto("f1", "it-float", 0, "NON_HAZ", "UN0000", 0, 0, 800, 1000, 1000, 1000, 500, "DEFAULT", true, 500.0);
+        CandidateLayoutDto floatLayout = new CandidateLayoutDto("l-float", 1, "comp-trailer-1", "d3", "FEASIBLE", "HEURISTIC_EP_3D_V1", List.of(floating));
+        ValidationResultDto floatRes = validator.validate(floatLayout, comp, null);
+        assertThat(floatRes.isPassed()).isFalse();
+        assertThat(floatRes.getFindings()).anyMatch(f -> "UNSUPPORTED_CARGO".equals(f.getCode()));
+
+        // Verify that recording a failed validation marks workflow as VALIDATION_FAILED and blocks approval
+        AssessmentEntity floatAssessment = assessmentWorkflowService.createAssessment("decl-float-01", 1, "snap-2026-q4-v1", comp);
+        floatAssessment = assessmentWorkflowService.recordCandidateLayout(floatAssessment.getId(), floatLayout);
+        floatAssessment = assessmentWorkflowService.recordValidationOutcome(floatAssessment.getId(), floatRes);
+        assertThat(floatAssessment.getWorkflowStatus()).isEqualTo("VALIDATION_FAILED");
+
+        String floatAsmtId = floatAssessment.getId();
+        String floatDigest = floatAssessment.getCandidateContentDigest();
+        assertThatThrownBy(() -> assessmentWorkflowService.approveCandidate(
+                floatAsmtId, 1, floatDigest, "planner-001", "Attempted illegal approval"
+        )).isInstanceOf(IllegalStateException.class)
+          .hasMessageContaining("Assessment cannot be approved in current state: VALIDATION_FAILED");
     }
 }
