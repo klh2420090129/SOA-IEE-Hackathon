@@ -1,0 +1,65 @@
+package org.soa8.freight.optimization.stub;
+
+import org.soa8.freight.common.model.*;
+import org.soa8.freight.common.util.DigestUtils;
+import org.springframework.stereotype.Service;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+
+/**
+ * Controlled Deterministic Optimization Stub for Milestone 1.
+ * Explicitly labeled with provenance "CONTROLLED_STUB".
+ * Does NOT perform real 3D mathematical programming or claim mathematical optimality.
+ * Provides deterministic 3D placements to prove the distributed workflow and validation pipeline.
+ */
+@Service
+public class ControlledOptimizerStub {
+
+    public static final String PROVENANCE_STUB = "CONTROLLED_STUB";
+
+    public CandidateLayoutDto generateControlledStubLayout(String compartmentId, int compLength, int compWidth, int compHeight,
+                                                          List<CargoItemDto> items) {
+        List<ItemPlacementDto> placements = new ArrayList<>();
+        int currentX = 0;
+        int currentY = 0;
+        int currentZ = 0;
+
+        for (CargoItemDto item : items) {
+            for (int i = 0; i < item.getQuantity(); i++) {
+                // Deterministic placement along X axis
+                placements.add(new ItemPlacementDto(
+                        UUID.randomUUID().toString(),
+                        item.getCargoItemId(),
+                        i,
+                        item.getHazardClass(),
+                        item.getUnNumber(),
+                        currentX,
+                        currentY,
+                        currentZ,
+                        item.getLengthMm(),
+                        item.getWidthMm(),
+                        item.getHeightMm(),
+                        item.getWeightKg(),
+                        "DEFAULT"
+                ));
+                // Advance along X axis with spacing
+                currentX += item.getLengthMm() + 100;
+            }
+        }
+
+        String layoutId = UUID.randomUUID().toString();
+        String digest = DigestUtils.computeObjectDigest(placements);
+
+        return new CandidateLayoutDto(
+                layoutId,
+                1,
+                compartmentId,
+                digest,
+                "FEASIBLE",
+                PROVENANCE_STUB,
+                placements
+        );
+    }
+}
