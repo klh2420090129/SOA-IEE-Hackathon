@@ -5,6 +5,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.soa8.freight.common.model.*;
 import org.soa8.freight.optimization.controller.OptimizationController;
+import org.soa8.freight.optimization.engine.Deterministic3DHeuristicOptimizer;
 import org.soa8.freight.optimization.model.JobStatus;
 import org.soa8.freight.optimization.model.OptimizationJobEntity;
 import org.soa8.freight.optimization.repository.OptimizationJobRepository;
@@ -54,7 +55,7 @@ class OptimizationJobLifecycleTest {
         assertThat(job).isNotNull();
         assertThat(job.getStatus()).isEqualTo(JobStatus.COMPLETED);
         assertThat(job.getSolverStatus()).isEqualTo(SolverStatus.FEASIBLE.name());
-        assertThat(job.getProvenance()).isEqualTo("CONTROLLED_STUB");
+        assertThat(job.getProvenance()).isEqualTo(Deterministic3DHeuristicOptimizer.ALGORITHM_PROVENANCE);
         assertThat(job.getRuleSnapshotId()).isEqualTo("snap-2026-q4-v1");
         assertThat(job.getTimeLimitSeconds()).isEqualTo(15);
         assertThat(job.getExecutionDurationMs()).isNotNull();

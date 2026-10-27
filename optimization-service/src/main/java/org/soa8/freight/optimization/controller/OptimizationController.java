@@ -6,6 +6,8 @@ import org.soa8.freight.common.model.CandidateLayoutDto;
 import org.soa8.freight.common.model.CargoItemDto;
 import org.soa8.freight.common.model.CompartmentDto;
 import org.soa8.freight.common.model.SolverStatus;
+import org.soa8.freight.optimization.client.RuleSnapshotClient;
+import org.soa8.freight.optimization.engine.Deterministic3DHeuristicOptimizer;
 import org.soa8.freight.optimization.model.JobStatus;
 import org.soa8.freight.optimization.model.OptimizationJobEntity;
 import org.soa8.freight.optimization.repository.OptimizationJobRepository;
@@ -27,17 +29,23 @@ public class OptimizationController {
     private final OptimizationJobRepository jobRepository;
     private final ControlledOptimizerStub optimizerStub;
     private final ObjectMapper objectMapper;
+    private final Deterministic3DHeuristicOptimizer heuristicOptimizer;
+    private final RuleSnapshotClient ruleSnapshotClient;
     private final int defaultTimeLimitSeconds;
     private final int maxTimeLimitSeconds;
 
     public OptimizationController(
             OptimizationJobRepository jobRepository,
             ControlledOptimizerStub optimizerStub,
+            Deterministic3DHeuristicOptimizer heuristicOptimizer,
+            RuleSnapshotClient ruleSnapshotClient,
             ObjectMapper objectMapper,
             @Value("${optimization.solver.default-time-limit-seconds:20}") int defaultTimeLimitSeconds,
             @Value("${optimization.solver.max-time-limit-seconds:30}") int maxTimeLimitSeconds) {
         this.jobRepository = jobRepository;
         this.optimizerStub = optimizerStub;
+        this.heuristicOptimizer = heuristicOptimizer;
+        this.ruleSnapshotClient = ruleSnapshotClient;
         this.objectMapper = objectMapper;
         this.defaultTimeLimitSeconds = defaultTimeLimitSeconds;
         this.maxTimeLimitSeconds = maxTimeLimitSeconds;
@@ -49,6 +57,7 @@ public class OptimizationController {
         public List<CargoItemDto> items;
         public String ruleSnapshotId;
         public Integer timeLimitSeconds;
+        public String algorithm; // Optional: "HEURISTIC_EP_3D_V1" (default) or "CONTROLLED_STUB"
     }
 
     public static class UpdateJobOutcomeRequest {
@@ -90,6 +99,10 @@ public class OptimizationController {
             ));
         }
 
+        // Resolve rule snapshot for deterministic segregation evaluation
+        org.soa8.freight.common.model.RuleSnapshotDto resolvedSnapshot = ruleSnapshotClient.resolveSnapshot(snapshotId)
+                .orElse(null);
+
         String jobId = UUID.randomUUID().toString();
         OptimizationJobEntity job = new OptimizationJobEntity(
                 jobId, req.declarationId, req.compartment.getCompartmentId(), snapshotId
@@ -97,24 +110,43 @@ public class OptimizationController {
         job.setTimeLimitSeconds(timeLimit);
         job.setStartedAt(Instant.now());
 
-        // In Phase A, execute synchronously via ControlledOptimizerStub to maintain backwards compatibility
+        // Select optimizer: Default to genuine Deterministic3DHeuristicOptimizer, or CONTROLLED_STUB if explicitly requested
+        CandidateLayoutDto layoutResult;
         long startMs = System.currentTimeMillis();
-        CandidateLayoutDto stubResult = optimizerStub.generateControlledStubLayout(
-                req.compartment.getCompartmentId(),
-                req.compartment.getLengthMm(),
-                req.compartment.getWidthMm(),
-                req.compartment.getHeightMm(),
-                req.items,
-                snapshotId
-        );
+
+        if (ControlledOptimizerStub.PROVENANCE_STUB.equalsIgnoreCase(req.algorithm)) {
+            layoutResult = optimizerStub.generateControlledStubLayout(
+                    req.compartment.getCompartmentId(),
+                    req.compartment.getLengthMm(),
+                    req.compartment.getWidthMm(),
+                    req.compartment.getHeightMm(),
+                    req.items,
+                    snapshotId
+            );
+        } else {
+            try {
+                layoutResult = heuristicOptimizer.optimize(
+                        req.compartment,
+                        req.items,
+                        resolvedSnapshot,
+                        snapshotId
+                );
+            } catch (IllegalArgumentException e) {
+                return ResponseEntity.badRequest().body(Map.of(
+                        "code", "INVALID_CARGO_INPUT",
+                        "message", e.getMessage()
+                ));
+            }
+        }
+
         long durationMs = System.currentTimeMillis() - startMs;
-        stubResult.setExecutionDurationMs(durationMs);
+        layoutResult.setExecutionDurationMs(durationMs);
 
         try {
-            job.setResultJson(objectMapper.writeValueAsString(stubResult));
+            job.setResultJson(objectMapper.writeValueAsString(layoutResult));
             job.transitionTo(JobStatus.COMPLETED);
-            job.setSolverStatus(stubResult.getSolverStatus());
-            job.setProvenance(stubResult.getProvenance());
+            job.setSolverStatus(layoutResult.getSolverStatus());
+            job.setProvenance(layoutResult.getProvenance());
             job.setExecutionDurationMs(durationMs);
             job.setCompletedAt(Instant.now());
             jobRepository.save(job);
