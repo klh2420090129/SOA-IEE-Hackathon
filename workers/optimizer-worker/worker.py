@@ -1,21 +1,133 @@
 import json
 import logging
+import os
+import signal
+import sys
+import time
 from typing import Dict, Any
 
-logging.basicConfig(level=logging.INFO)
+from kafka import KafkaConsumer, KafkaProducer
+from heuristic_solver import solve_3d_packing
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] [%(name)s] %(message)s'
+)
 logger = logging.getLogger("OptimizerWorker")
 
-def solve_loading(data: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Milestone 2 Worker Hook for Google OR-Tools CP-SAT and heuristic 3D bin packing.
-    Currently labeled PROVENANCE: REAL_OPTIMIZER_SKELETON.
-    """
-    logger.info("Received optimization payload with %d items", len(data.get("items", [])))
-    return {
-        "solverStatus": "FEASIBLE",
-        "provenance": "REAL_OPTIMIZER_SKELETON",
-        "placements": []
-    }
+BOOTSTRAP_SERVERS = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+COMMAND_TOPIC = os.environ.get("OPTIMIZATION_COMMAND_TOPIC", "soa.s06.t08.optimization.commands")
+RESULT_TOPIC = os.environ.get("OPTIMIZATION_RESULT_TOPIC", "soa.s06.t08.optimization.results")
+CONSUMER_GROUP = os.environ.get("WORKER_CONSUMER_GROUP", "optimizer-worker-python-group")
+
+running = True
+
+def signal_handler(sig, frame):
+    global running
+    logger.info("Termination signal received. Shutting down worker...")
+    running = False
+
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
+
+def run_worker():
+    global running
+    logger.info("Initializing Python Optimizer Worker connecting to %s", BOOTSTRAP_SERVERS)
+    logger.info("Command Topic: %s | Result Topic: %s", COMMAND_TOPIC, RESULT_TOPIC)
+
+    producer = None
+    consumer = None
+
+    try:
+        producer = KafkaProducer(
+            bootstrap_servers=BOOTSTRAP_SERVERS.split(","),
+            value_serializer=lambda v: json.dumps(v).encode("utf-8"),
+            key_serializer=lambda k: k.encode("utf-8") if k else None,
+            acks="all",
+            retries=5
+        )
+
+        consumer = KafkaConsumer(
+            COMMAND_TOPIC,
+            bootstrap_servers=BOOTSTRAP_SERVERS.split(","),
+            group_id=CONSUMER_GROUP,
+            auto_offset_reset="earliest",
+            enable_auto_commit=False,
+            value_deserializer=lambda m: json.loads(m.decode("utf-8")),
+            consumer_timeout_ms=1000
+        )
+        logger.info("Worker consumer successfully subscribed to topic %s", COMMAND_TOPIC)
+    except Exception as e:
+        logger.error("Failed to connect to Kafka: %s. Worker running in polling retry loop.", e)
+
+    processed_ids = set()
+
+    while running:
+        if not consumer or not producer:
+            time.sleep(2)
+            try:
+                producer = KafkaProducer(
+                    bootstrap_servers=BOOTSTRAP_SERVERS.split(","),
+                    value_serializer=lambda v: json.dumps(v).encode("utf-8"),
+                    key_serializer=lambda k: k.encode("utf-8") if k else None,
+                    acks="all",
+                    retries=5
+                )
+                consumer = KafkaConsumer(
+                    COMMAND_TOPIC,
+                    bootstrap_servers=BOOTSTRAP_SERVERS.split(","),
+                    group_id=CONSUMER_GROUP,
+                    auto_offset_reset="earliest",
+                    enable_auto_commit=False,
+                    value_deserializer=lambda m: json.loads(m.decode("utf-8")),
+                    consumer_timeout_ms=1000
+                )
+                logger.info("Reconnection to Kafka successful.")
+            except Exception:
+                continue
+
+        try:
+            records = consumer.poll(timeout_ms=1000)
+            for topic_partition, messages in records.items():
+                for msg in messages:
+                    command = msg.value
+                    command_id = command.get("commandId")
+                    job_id = command.get("jobId")
+                    attempt_id = command.get("attemptId")
+
+                    logger.info("Processing optimization command [%s] for jobId [%s] attempt [%s]",
+                                command_id, job_id, attempt_id)
+
+                    # Deduplication of command in-worker
+                    if command_id and command_id in processed_ids:
+                        logger.warning("Command [%s] already processed by this worker. Committing offset.", command_id)
+                        consumer.commit()
+                        continue
+
+                    # Execute deterministic packing heuristic
+                    result = solve_3d_packing(command)
+
+                    # Dispatch result to RESULT_TOPIC keyed by jobId
+                    producer.send(RESULT_TOPIC, key=job_id, value=result)
+                    producer.flush()
+
+                    logger.info("Dispatched result [%s] for jobId [%s] status [%s] duration [%d ms]",
+                                result.get("resultId"), job_id, result.get("solverStatus"), result.get("executionDurationMs", 0))
+
+                    if command_id:
+                        processed_ids.add(command_id)
+                    consumer.commit()
+
+        except Exception as e:
+            if running:
+                logger.error("Error during worker execution cycle: %s", e)
+                time.sleep(1)
+
+    if consumer:
+        consumer.close()
+    if producer:
+        producer.close()
+    logger.info("Worker gracefully terminated.")
 
 if __name__ == "__main__":
-    logger.info("Optimizer Worker ready for Milestone 2 CP-SAT integration.")
+    run_worker()

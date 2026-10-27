@@ -11,6 +11,7 @@ import org.soa8.freight.optimization.engine.Deterministic3DHeuristicOptimizer;
 import org.soa8.freight.optimization.model.JobStatus;
 import org.soa8.freight.optimization.model.OptimizationJobEntity;
 import org.soa8.freight.optimization.repository.OptimizationJobRepository;
+import org.soa8.freight.optimization.service.OptimizationJobService;
 import org.soa8.freight.optimization.stub.ControlledOptimizerStub;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -31,6 +32,7 @@ public class OptimizationController {
     private final ObjectMapper objectMapper;
     private final Deterministic3DHeuristicOptimizer heuristicOptimizer;
     private final RuleSnapshotClient ruleSnapshotClient;
+    private final OptimizationJobService optimizationJobService;
     private final int defaultTimeLimitSeconds;
     private final int maxTimeLimitSeconds;
 
@@ -39,6 +41,7 @@ public class OptimizationController {
             ControlledOptimizerStub optimizerStub,
             Deterministic3DHeuristicOptimizer heuristicOptimizer,
             RuleSnapshotClient ruleSnapshotClient,
+            OptimizationJobService optimizationJobService,
             ObjectMapper objectMapper,
             @Value("${optimization.solver.default-time-limit-seconds:20}") int defaultTimeLimitSeconds,
             @Value("${optimization.solver.max-time-limit-seconds:30}") int maxTimeLimitSeconds) {
@@ -46,6 +49,7 @@ public class OptimizationController {
         this.optimizerStub = optimizerStub;
         this.heuristicOptimizer = heuristicOptimizer;
         this.ruleSnapshotClient = ruleSnapshotClient;
+        this.optimizationJobService = optimizationJobService;
         this.objectMapper = objectMapper;
         this.defaultTimeLimitSeconds = defaultTimeLimitSeconds;
         this.maxTimeLimitSeconds = maxTimeLimitSeconds;
@@ -57,7 +61,8 @@ public class OptimizationController {
         public List<CargoItemDto> items;
         public String ruleSnapshotId;
         public Integer timeLimitSeconds;
-        public String algorithm; // Optional: "HEURISTIC_EP_3D_V1" (default) or "CONTROLLED_STUB"
+        public String algorithm; // Optional: "HEURISTIC_EP_3D_V1" (default), "PYTHON_WORKER", or "CONTROLLED_STUB"
+        public Boolean async;    // If true, dispatches asynchronously via Outbox & Kafka without blocking
     }
 
     public static class UpdateJobOutcomeRequest {
@@ -108,6 +113,20 @@ public class OptimizationController {
                     "code", "RULE_SNAPSHOT_UNAVAILABLE",
                     "message", "Mandatory immutable rule snapshot '" + snapshotId + "' is missing, unreviewed, or unavailable. Failing closed."
             ));
+        }
+
+        // If asynchronous dispatch is requested (or worker execution), persist durable job & outbox record and return immediately
+        if (Boolean.TRUE.equals(req.async) || "PYTHON_WORKER".equalsIgnoreCase(req.algorithm)) {
+            OptimizationJobEntity durableJob = optimizationJobService.submitJobDurable(
+                    req.declarationId,
+                    req.compartment,
+                    req.items,
+                    resolvedSnapshot,
+                    snapshotId,
+                    req.algorithm != null ? req.algorithm : "HEURISTIC_EP_3D_V1",
+                    timeLimit
+            );
+            return ResponseEntity.status(HttpStatus.ACCEPTED).body(durableJob);
         }
 
         String jobId = UUID.randomUUID().toString();
@@ -187,10 +206,13 @@ public class OptimizationController {
                     statusMap.put("compartmentId", job.getCompartmentId());
                     statusMap.put("ruleSnapshotId", job.getRuleSnapshotId());
                     statusMap.put("status", job.getStatus().name());
+                    statusMap.put("currentAttemptId", job.getCurrentAttemptId());
+                    statusMap.put("attemptCount", job.getAttemptCount());
                     statusMap.put("solverStatus", job.getSolverStatus());
                     statusMap.put("provenance", job.getProvenance());
                     statusMap.put("timeLimitSeconds", job.getTimeLimitSeconds());
                     statusMap.put("executionDurationMs", job.getExecutionDurationMs() != null ? job.getExecutionDurationMs() : 0);
+                    statusMap.put("errorMessage", job.getErrorMessage() != null ? job.getErrorMessage() : "");
                     statusMap.put("createdAt", job.getCreatedAt() != null ? job.getCreatedAt().toString() : "");
                     statusMap.put("completedAt", job.getCompletedAt() != null ? job.getCompletedAt().toString() : "");
                     return ResponseEntity.ok(statusMap);

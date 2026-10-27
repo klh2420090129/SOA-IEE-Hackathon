@@ -13,11 +13,15 @@ public class OptimizationJobEntity {
     private String compartmentId;
     private String ruleSnapshotId;
 
+    private String currentAttemptId;
+    private int attemptCount;
+    private String correlationId;
+
     @Enumerated(EnumType.STRING)
     private JobStatus status;       // SUBMITTED, RUNNING, COMPLETED, FAILED, TIMEOUT, CANCELLED
 
     private String solverStatus; // OPTIMAL, FEASIBLE, INFEASIBLE, UNKNOWN, TIMEOUT
-    private String provenance;   // CONTROLLED_STUB, OR_TOOLS_CPSAT_V1, etc.
+    private String provenance;   // CONTROLLED_STUB, HEURISTIC_EP_3D_V1, PYTHON_HEURISTIC_EP_3D_V1, etc.
 
     private Integer timeLimitSeconds; // Configured solver budget (default 20, max 30)
     private Long executionDurationMs;
@@ -41,8 +45,10 @@ public class OptimizationJobEntity {
         this.ruleSnapshotId = ruleSnapshotId;
         this.status = JobStatus.SUBMITTED;
         this.solverStatus = "UNKNOWN";
-        this.provenance = "CONTROLLED_STUB";
+        this.provenance = "HEURISTIC_EP_3D_V1";
         this.timeLimitSeconds = 20;
+        this.attemptCount = 1;
+        this.currentAttemptId = "att-1-" + jobId;
         this.createdAt = Instant.now();
     }
 
@@ -94,4 +100,13 @@ public class OptimizationJobEntity {
 
     public Instant getCompletedAt() { return completedAt; }
     public void setCompletedAt(Instant completedAt) { this.completedAt = completedAt; }
+
+    public String getCurrentAttemptId() { return currentAttemptId; }
+    public void setCurrentAttemptId(String currentAttemptId) { this.currentAttemptId = currentAttemptId; }
+
+    public int getAttemptCount() { return attemptCount; }
+    public void setAttemptCount(int attemptCount) { this.attemptCount = attemptCount; }
+
+    public String getCorrelationId() { return correlationId; }
+    public void setCorrelationId(String correlationId) { this.correlationId = correlationId; }
 }

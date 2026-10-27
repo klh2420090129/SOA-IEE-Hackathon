@@ -14,6 +14,22 @@ spring:
     hibernate:
       ddl-auto: update
     show-sql: false
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+    consumer:
+      group-id: optimization-service-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+
+app:
+  kafka:
+    command-topic: ${OPTIMIZATION_COMMAND_TOPIC:soa.s06.t08.optimization.commands}
+    result-topic: ${OPTIMIZATION_RESULT_TOPIC:soa.s06.t08.optimization.results}
+    dead-letter-topic: ${OPTIMIZATION_DLT_TOPIC:soa.s06.t08.optimization.dlt}
 
 eureka:
   instance:

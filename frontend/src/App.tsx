@@ -235,8 +235,8 @@ export default function App() {
       const asmt: Assessment = await compRes.json();
       setAssessment(asmt);
 
-      // 3. Dispatch to Optimizer Service
-      setActionMessage('Step 3/5: Calling Optimizer Service (CONTROLLED_STUB)...');
+      // 3. Dispatch to Optimizer Service asynchronously with durable outbox
+      setActionMessage('Step 3/5: Submitting durable optimization job (asynchronous outbox dispatch)...');
       const optRes = await fetch('/api/v1/optimization-jobs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -249,14 +249,38 @@ export default function App() {
             heightMm: 2600,
             maxPayloadKg: 25000
           },
-          items: declData.items
+          items: declData.items,
+          ruleSnapshotId: 'snap-2026-q4-v1',
+          algorithm: 'DETERMINISTIC_3D_HEURISTIC',
+          async: true
         })
       });
       if (!optRes.ok) {
-        throw new Error(`Optimization job failed (HTTP ${optRes.status})`);
+        throw new Error(`Optimization job submission failed (HTTP ${optRes.status})`);
       }
       const optJob = await optRes.json();
-      const layoutResultRes = await fetch(`/api/v1/optimization-jobs/${optJob.jobId}/result`);
+      const jobId = optJob.jobId;
+
+      // Adaptive polling on job status
+      let pollAttempts = 0;
+      const maxPollAttempts = 30;
+      let jobStatus = optJob.status;
+      while (pollAttempts < maxPollAttempts && (jobStatus === 'SUBMITTED' || jobStatus === 'RUNNING')) {
+        pollAttempts++;
+        setActionMessage(`Step 3/5: Optimization job ${jobId.slice(0, 8)} running (attempt ${pollAttempts}/${maxPollAttempts})...`);
+        await new Promise(r => setTimeout(r, 1000));
+        const statusRes = await fetch(`/api/v1/optimization-jobs/${jobId}/status`);
+        if (statusRes.ok) {
+          const statusData = await statusRes.json();
+          jobStatus = statusData.status;
+          if (jobStatus === 'COMPLETED') break;
+          if (jobStatus === 'FAILED' || jobStatus === 'TIMEOUT') {
+            throw new Error(`Optimization job ended with status: ${jobStatus} (${statusData.errorMessage || 'No error details'})`);
+          }
+        }
+      }
+
+      const layoutResultRes = await fetch(`/api/v1/optimization-jobs/${jobId}/result`);
       if (!layoutResultRes.ok) {
         throw new Error(`Layout retrieval failed (HTTP ${layoutResultRes.status})`);
       }
