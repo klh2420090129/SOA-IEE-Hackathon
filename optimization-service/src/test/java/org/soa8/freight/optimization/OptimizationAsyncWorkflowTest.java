@@ -321,5 +321,55 @@ class OptimizationAsyncWorkflowTest {
         assertThat(postLateResultJob.getStatus()).isEqualTo(JobStatus.TIMEOUT);
         assertThat(postLateResultJob.getSolverStatus()).isEqualTo("TIMEOUT");
     }
+
+
+    @Test
+    @DisplayName("7. Deadline boundary and repeated sweep idempotency")
+    void testDeadlineBoundaryAndRepeatedSweeps() {
+        OptimizationJobEntity job = jobService.submitJobDurable(
+                "decl-async-007",
+                new CompartmentDto("comp-test-1", "Standard Trailer", 12000, 2400, 2600, 25000),
+                List.of(new CargoItemDto("it-1", "Drums", "3", "UN1993", 1000, 1000, 1000, 400, true, 800, 1)),
+                null,
+                "snap-2026-q4-v1",
+                "PYTHON_WORKER",
+                30 // 30 seconds deadline
+        );
+
+        // Job has not expired yet (created just now)
+        int initialSweepCount = jobService.recoverStuckJobs();
+        OptimizationJobEntity unexpiredJob = jobRepository.findById(job.getJobId()).orElseThrow();
+        assertThat(unexpiredJob.getStatus()).isEqualTo(JobStatus.SUBMITTED);
+
+        // Fast-forward to expired
+        unexpiredJob.setCreatedAt(java.time.Instant.now().minusSeconds(40));
+        jobRepository.save(unexpiredJob);
+
+        // First sweep times it out
+        int firstSweep = jobService.recoverStuckJobs();
+        assertThat(firstSweep).isGreaterThanOrEqualTo(1);
+        OptimizationJobEntity expiredJob = jobRepository.findById(job.getJobId()).orElseThrow();
+        assertThat(expiredJob.getStatus()).isEqualTo(JobStatus.TIMEOUT);
+
+        // Repeated sweep ignores already timed-out terminal job
+        int secondSweep = jobService.recoverStuckJobs();
+        assertThat(secondSweep).isEqualTo(0);
+        OptimizationJobEntity afterSecondSweep = jobRepository.findById(job.getJobId()).orElseThrow();
+        assertThat(afterSecondSweep.getStatus()).isEqualTo(JobStatus.TIMEOUT);
+    }
+
+    @Test
+    @DisplayName("8. Poison message routing to configured DLT topic")
+    void testPoisonMessageRoutedToDLT() {
+        // Malformed JSON payload
+        String poisonPayload = "{\"jobId\": 12345, \"corrupted\": true, \"unclosed_json";
+
+        resultConsumer.consumeOptimizationResult(poisonPayload);
+
+        // Verify KafkaTemplate dispatched message to DLT topic
+        org.mockito.Mockito.verify(kafkaTemplate, org.mockito.Mockito.atLeastOnce())
+                .send(org.mockito.ArgumentMatchers.eq("soa.s06.t08.optimization.dlt"), org.mockito.ArgumentMatchers.contains("PARSE_ERROR"));
+    }
 }
+
 
