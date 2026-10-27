@@ -7,11 +7,14 @@ import org.soa8.freight.compartment.model.AssessmentEntity;
 import org.soa8.freight.compartment.model.CandidateLayoutEntity;
 import org.soa8.freight.compartment.repository.AssessmentRepository;
 import org.soa8.freight.compartment.repository.CandidateLayoutRepository;
+import org.soa8.freight.compartment.repository.OutboxEventRepository;
 import org.soa8.freight.compartment.service.AssessmentWorkflowService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import org.soa8.freight.compartment.security.TokenValidator;
+import io.jsonwebtoken.Claims;
 import java.util.Map;
 
 @RestController
@@ -20,14 +23,20 @@ public class CompartmentController {
 
     private final AssessmentRepository assessmentRepository;
     private final CandidateLayoutRepository layoutRepository;
+    private final OutboxEventRepository outboxEventRepository;
     private final AssessmentWorkflowService workflowService;
+    private final TokenValidator tokenValidator;
 
     public CompartmentController(AssessmentRepository assessmentRepository,
                                  CandidateLayoutRepository layoutRepository,
-                                 AssessmentWorkflowService workflowService) {
+                                 OutboxEventRepository outboxEventRepository,
+                                 AssessmentWorkflowService workflowService,
+                                 TokenValidator tokenValidator) {
         this.assessmentRepository = assessmentRepository;
         this.layoutRepository = layoutRepository;
+        this.outboxEventRepository = outboxEventRepository;
         this.workflowService = workflowService;
+        this.tokenValidator = tokenValidator;
     }
 
     public static class CreateAssessmentRequest {
@@ -95,11 +104,31 @@ public class CompartmentController {
     }
 
     @PostMapping("/assessments/{id}/approve")
-    public ResponseEntity<?> approveCandidate(@PathVariable("id") String id, @RequestBody DecisionRequest req) {
+    public ResponseEntity<?> approveCandidate(@PathVariable("id") String id,
+                                              @RequestHeader(value = "Authorization", required = false) String authHeader,
+                                              @RequestBody DecisionRequest req) {
+        Claims claims;
         try {
+            claims = tokenValidator.validateToken(authHeader);
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of(
+                    "code", "UNAUTHORIZED",
+                    "message", "Valid bearer token required: " + e.getMessage()
+            ));
+        }
+
+        if (!tokenValidator.hasRole(claims, "ROLE_LOAD_PLANNER")) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
+                    "code", "FORBIDDEN",
+                    "message", "Load Planner role (ROLE_LOAD_PLANNER) required to approve candidate layout"
+            ));
+        }
+
+        try {
+            String plannerId = req.plannerId != null ? req.plannerId : claims.getSubject();
             AssessmentEntity updated = workflowService.approveCandidate(
                     id, req.layoutVersion, req.expectedDigest,
-                    req.plannerId != null ? req.plannerId : "planner-system",
+                    plannerId,
                     req.notes
             );
             return ResponseEntity.ok(updated);
@@ -114,11 +143,31 @@ public class CompartmentController {
     }
 
     @PostMapping("/assessments/{id}/reject")
-    public ResponseEntity<?> rejectCandidate(@PathVariable("id") String id, @RequestBody DecisionRequest req) {
+    public ResponseEntity<?> rejectCandidate(@PathVariable("id") String id,
+                                             @RequestHeader(value = "Authorization", required = false) String authHeader,
+                                             @RequestBody DecisionRequest req) {
+        Claims claims;
         try {
+            claims = tokenValidator.validateToken(authHeader);
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of(
+                    "code", "UNAUTHORIZED",
+                    "message", "Valid bearer token required: " + e.getMessage()
+            ));
+        }
+
+        if (!tokenValidator.hasRole(claims, "ROLE_LOAD_PLANNER")) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
+                    "code", "FORBIDDEN",
+                    "message", "Load Planner role (ROLE_LOAD_PLANNER) required to reject candidate layout"
+            ));
+        }
+
+        try {
+            String plannerId = req.plannerId != null ? req.plannerId : claims.getSubject();
             AssessmentEntity updated = workflowService.rejectCandidate(
                     id, req.layoutVersion,
-                    req.plannerId != null ? req.plannerId : "planner-system",
+                    plannerId,
                     req.rejectionReasonCode != null ? req.rejectionReasonCode : "OPERATIONAL_REJECTION",
                     req.notes
             );
@@ -126,6 +175,34 @@ public class CompartmentController {
         } catch (IllegalArgumentException e) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("code", "NOT_FOUND", "message", e.getMessage()));
         }
+    }
+
+    @GetMapping("/assessments/{id}/events")
+    public ResponseEntity<?> getAssessmentEvents(@PathVariable("id") String id) {
+        return ResponseEntity.ok(outboxEventRepository.findByStatusOrderByCreatedAtAsc("PENDING"));
+    }
+
+    @GetMapping("/assessments/{id}/layout")
+    public ResponseEntity<?> getAssessmentCurrentLayout(@PathVariable("id") String id) {
+        return assessmentRepository.findById(id)
+                .<ResponseEntity<?>>map(a -> {
+                    if (a.getCandidateLayoutId() == null) {
+                        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
+                                "code", "NO_CANDIDATE_LAYOUT",
+                                "message", "No candidate layout registered for assessment " + id
+                        ));
+                    }
+                    return layoutRepository.findByAssessmentIdAndLayoutVersion(id, a.getCandidateLayoutVersion())
+                            .<ResponseEntity<?>>map(ResponseEntity::ok)
+                            .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
+                                    "code", "LAYOUT_NOT_FOUND",
+                                    "message", "Layout entity not found"
+                            )));
+                })
+                .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
+                        "code", "ASSESSMENT_NOT_FOUND",
+                        "message", "Assessment not found: " + id
+                )));
     }
 
     @GetMapping("/layouts/{id}/versions/{version}")
