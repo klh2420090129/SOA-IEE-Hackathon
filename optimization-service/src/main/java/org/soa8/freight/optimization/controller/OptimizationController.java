@@ -5,9 +5,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.soa8.freight.common.model.CandidateLayoutDto;
 import org.soa8.freight.common.model.CargoItemDto;
 import org.soa8.freight.common.model.CompartmentDto;
+import org.soa8.freight.common.model.SolverStatus;
+import org.soa8.freight.optimization.model.JobStatus;
 import org.soa8.freight.optimization.model.OptimizationJobEntity;
 import org.soa8.freight.optimization.repository.OptimizationJobRepository;
 import org.soa8.freight.optimization.stub.ControlledOptimizerStub;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -24,49 +27,103 @@ public class OptimizationController {
     private final OptimizationJobRepository jobRepository;
     private final ControlledOptimizerStub optimizerStub;
     private final ObjectMapper objectMapper;
+    private final int defaultTimeLimitSeconds;
+    private final int maxTimeLimitSeconds;
 
-    public OptimizationController(OptimizationJobRepository jobRepository,
-                                  ControlledOptimizerStub optimizerStub,
-                                  ObjectMapper objectMapper) {
+    public OptimizationController(
+            OptimizationJobRepository jobRepository,
+            ControlledOptimizerStub optimizerStub,
+            ObjectMapper objectMapper,
+            @Value("${optimization.solver.default-time-limit-seconds:20}") int defaultTimeLimitSeconds,
+            @Value("${optimization.solver.max-time-limit-seconds:30}") int maxTimeLimitSeconds) {
         this.jobRepository = jobRepository;
         this.optimizerStub = optimizerStub;
         this.objectMapper = objectMapper;
+        this.defaultTimeLimitSeconds = defaultTimeLimitSeconds;
+        this.maxTimeLimitSeconds = maxTimeLimitSeconds;
     }
 
     public static class CreateOptimizationJobRequest {
         public String declarationId;
         public CompartmentDto compartment;
         public List<CargoItemDto> items;
+        public String ruleSnapshotId;
+        public Integer timeLimitSeconds;
+    }
+
+    public static class UpdateJobOutcomeRequest {
+        public SolverStatus solverStatus;
+        public String provenance;
+        public CandidateLayoutDto candidateLayout;
+        public String errorMessage;
     }
 
     @PostMapping
     public ResponseEntity<?> submitJob(@RequestBody CreateOptimizationJobRequest req) {
-        if (req.declarationId == null || req.compartment == null || req.items == null) {
-            return ResponseEntity.badRequest().body(Map.of("code", "VALIDATION_ERROR", "message", "Missing required fields"));
+        if (req.declarationId == null || req.declarationId.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("code", "VALIDATION_ERROR", "message", "declarationId is required"));
+        }
+        if (req.compartment == null || req.compartment.getCompartmentId() == null) {
+            return ResponseEntity.badRequest().body(Map.of("code", "VALIDATION_ERROR", "message", "compartment with compartmentId is required"));
+        }
+        if (req.items == null) {
+            return ResponseEntity.badRequest().body(Map.of("code", "VALIDATION_ERROR", "message", "items list is required"));
+        }
+
+        // Validate time limit budget
+        int timeLimit = (req.timeLimitSeconds != null && req.timeLimitSeconds > 0)
+                ? req.timeLimitSeconds : defaultTimeLimitSeconds;
+        if (timeLimit > maxTimeLimitSeconds) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "code", "INVALID_TIMEOUT_BUDGET",
+                    "message", "timeLimitSeconds (" + timeLimit + ") exceeds maximum permitted ceiling (" + maxTimeLimitSeconds + "s)"
+            ));
+        }
+
+        // Validate pinned rule snapshot identity
+        String snapshotId = (req.ruleSnapshotId != null && !req.ruleSnapshotId.isBlank())
+                ? req.ruleSnapshotId : "snap-2026-q4-v1";
+        if (snapshotId.trim().isEmpty() || "null".equalsIgnoreCase(snapshotId)) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "code", "INVALID_RULE_SNAPSHOT",
+                    "message", "A valid immutable ruleSnapshotId is required to bind optimization job"
+            ));
         }
 
         String jobId = UUID.randomUUID().toString();
-        OptimizationJobEntity job = new OptimizationJobEntity(jobId, req.declarationId, req.compartment.getCompartmentId());
+        OptimizationJobEntity job = new OptimizationJobEntity(
+                jobId, req.declarationId, req.compartment.getCompartmentId(), snapshotId
+        );
+        job.setTimeLimitSeconds(timeLimit);
+        job.setStartedAt(Instant.now());
 
-        // In Milestone 1, solve synchronously using the Controlled Optimizer Stub
+        // In Phase A, execute synchronously via ControlledOptimizerStub to maintain backwards compatibility
+        long startMs = System.currentTimeMillis();
         CandidateLayoutDto stubResult = optimizerStub.generateControlledStubLayout(
                 req.compartment.getCompartmentId(),
                 req.compartment.getLengthMm(),
                 req.compartment.getWidthMm(),
                 req.compartment.getHeightMm(),
-                req.items
+                req.items,
+                snapshotId
         );
+        long durationMs = System.currentTimeMillis() - startMs;
+        stubResult.setExecutionDurationMs(durationMs);
 
         try {
             job.setResultJson(objectMapper.writeValueAsString(stubResult));
-            job.setStatus("COMPLETED");
+            job.transitionTo(JobStatus.COMPLETED);
             job.setSolverStatus(stubResult.getSolverStatus());
             job.setProvenance(stubResult.getProvenance());
+            job.setExecutionDurationMs(durationMs);
             job.setCompletedAt(Instant.now());
             jobRepository.save(job);
 
             return ResponseEntity.status(HttpStatus.ACCEPTED).body(job);
         } catch (JsonProcessingException e) {
+            job.transitionTo(JobStatus.FAILED);
+            job.setErrorMessage("Serialization failure: " + e.getMessage());
+            jobRepository.save(job);
             return ResponseEntity.internalServerError().body(Map.of("code", "SERIALIZATION_ERROR", "message", e.getMessage()));
         }
     }
@@ -75,13 +132,52 @@ public class OptimizationController {
     public ResponseEntity<?> getJob(@PathVariable("id") String id) {
         return jobRepository.findById(id)
                 .<ResponseEntity<?>>map(ResponseEntity::ok)
-                .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("code", "NOT_FOUND", "message", "Job not found: " + id)));
+                .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
+                        "code", "NOT_FOUND",
+                        "message", "Job not found: " + id
+                )));
+    }
+
+    @GetMapping("/{id}/status")
+    public ResponseEntity<?> getJobStatus(@PathVariable("id") String id) {
+        return jobRepository.findById(id)
+                .<ResponseEntity<?>>map(job -> {
+                    java.util.Map<String, Object> statusMap = new java.util.LinkedHashMap<>();
+                    statusMap.put("jobId", job.getJobId());
+                    statusMap.put("declarationId", job.getDeclarationId());
+                    statusMap.put("compartmentId", job.getCompartmentId());
+                    statusMap.put("ruleSnapshotId", job.getRuleSnapshotId());
+                    statusMap.put("status", job.getStatus().name());
+                    statusMap.put("solverStatus", job.getSolverStatus());
+                    statusMap.put("provenance", job.getProvenance());
+                    statusMap.put("timeLimitSeconds", job.getTimeLimitSeconds());
+                    statusMap.put("executionDurationMs", job.getExecutionDurationMs() != null ? job.getExecutionDurationMs() : 0);
+                    statusMap.put("createdAt", job.getCreatedAt() != null ? job.getCreatedAt().toString() : "");
+                    statusMap.put("completedAt", job.getCompletedAt() != null ? job.getCompletedAt().toString() : "");
+                    return ResponseEntity.ok(statusMap);
+                })
+                .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
+                        "code", "NOT_FOUND",
+                        "message", "Job not found: " + id
+                )));
     }
 
     @GetMapping("/{id}/result")
     public ResponseEntity<?> getJobResult(@PathVariable("id") String id) {
         return jobRepository.findById(id)
                 .<ResponseEntity<?>>map(job -> {
+                    if (job.getStatus() == JobStatus.SUBMITTED || job.getStatus() == JobStatus.RUNNING) {
+                        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                                "code", "JOB_NOT_READY",
+                                "message", "Optimization job is still in status: " + job.getStatus()
+                        ));
+                    }
+                    if (job.getStatus() == JobStatus.FAILED || job.getStatus() == JobStatus.TIMEOUT || job.getStatus() == JobStatus.CANCELLED) {
+                        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(Map.of(
+                                "code", "JOB_" + job.getStatus().name(),
+                                "message", job.getErrorMessage() != null ? job.getErrorMessage() : "Job terminated in state: " + job.getStatus()
+                        ));
+                    }
                     try {
                         CandidateLayoutDto result = objectMapper.readValue(job.getResultJson(), CandidateLayoutDto.class);
                         return ResponseEntity.ok(result);
@@ -89,6 +185,9 @@ public class OptimizationController {
                         return ResponseEntity.internalServerError().body(Map.of("code", "PARSE_ERROR", "message", e.getMessage()));
                     }
                 })
-                .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("code", "NOT_FOUND", "message", "Job not found: " + id)));
+                .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
+                        "code", "NOT_FOUND",
+                        "message", "Job not found: " + id
+                )));
     }
 }
