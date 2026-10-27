@@ -80,6 +80,9 @@ class EndToEndVerticalSliceIntegrationTest {
     private IndependentValidator validator;
 
     @Autowired
+    private org.soa8.freight.validation.repository.ValidationRunRepository validationRunRepository;
+
+    @Autowired
     private OutboxEventRepository outboxEventRepository;
 
     @Autowired
@@ -87,6 +90,9 @@ class EndToEndVerticalSliceIntegrationTest {
 
     @Autowired
     private DeclarationWorkflowProjectionRepository projectionRepository;
+
+    @org.springframework.boot.test.mock.mockito.MockBean
+    private org.soa8.freight.compartment.client.ValidationServiceClient validationServiceClient;
 
     @Autowired
     private ObjectMapper objectMapper;
@@ -145,6 +151,15 @@ class EndToEndVerticalSliceIntegrationTest {
         ValidationResultDto validationResult = validator.validate(candidate, comp, null);
         assertThat(validationResult.isPassed()).isTrue();
         assertThat(validationResult.getValidatorVersion()).isEqualTo("1.0.0-m1");
+
+        // Set provenance fields matching candidate & snapshot
+        validationResult.setCandidateLayoutId(candidate.getLayoutId());
+        validationResult.setCandidateLayoutVersion(candidate.getLayoutVersion());
+        validationResult.setCandidateContentDigest(candidateDigest);
+        validationResult.setRuleSnapshotId(assessment.getRuleSnapshotId());
+
+        org.mockito.Mockito.when(validationServiceClient.getValidationRun(validationResult.getValidationId()))
+                .thenReturn(java.util.Optional.of(validationResult));
 
         // Record Validation Result
         assessment = assessmentWorkflowService.recordValidationOutcome(assessment.getId(), validationResult);
@@ -227,6 +242,14 @@ class EndToEndVerticalSliceIntegrationTest {
 
         AssessmentEntity unverifiedAssessment = assessmentWorkflowService.createAssessment("decl-unver-01", 1, "snap-2026-q4-v1", comp);
         unverifiedAssessment = assessmentWorkflowService.recordCandidateLayout(unverifiedAssessment.getId(), unverifiedLayout);
+        unverifiedRes.setCandidateLayoutId(unverifiedLayout.getLayoutId());
+        unverifiedRes.setCandidateLayoutVersion(unverifiedLayout.getLayoutVersion());
+        unverifiedRes.setCandidateContentDigest(unverifiedAssessment.getCandidateContentDigest());
+        unverifiedRes.setRuleSnapshotId(unverifiedAssessment.getRuleSnapshotId());
+
+        org.mockito.Mockito.when(validationServiceClient.getValidationRun(unverifiedRes.getValidationId()))
+                .thenReturn(java.util.Optional.of(unverifiedRes));
+
         unverifiedAssessment = assessmentWorkflowService.recordValidationOutcome(unverifiedAssessment.getId(), unverifiedRes);
         assertThat(unverifiedAssessment.getWorkflowStatus()).isEqualTo("VALIDATION_FAILED");
 

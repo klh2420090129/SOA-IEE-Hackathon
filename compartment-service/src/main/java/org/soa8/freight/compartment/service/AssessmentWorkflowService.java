@@ -30,15 +30,18 @@ public class AssessmentWorkflowService {
     private final CandidateLayoutRepository layoutRepository;
     private final OutboxEventRepository outboxEventRepository;
     private final ObjectMapper objectMapper;
+    private final org.soa8.freight.compartment.client.ValidationServiceClient validationClient;
 
     public AssessmentWorkflowService(AssessmentRepository assessmentRepository,
                                      CandidateLayoutRepository layoutRepository,
                                      OutboxEventRepository outboxEventRepository,
-                                     ObjectMapper objectMapper) {
+                                     ObjectMapper objectMapper,
+                                     org.soa8.freight.compartment.client.ValidationServiceClient validationClient) {
         this.assessmentRepository = assessmentRepository;
         this.layoutRepository = layoutRepository;
         this.outboxEventRepository = outboxEventRepository;
         this.objectMapper = objectMapper;
+        this.validationClient = validationClient;
     }
 
     @Transactional
@@ -58,8 +61,21 @@ public class AssessmentWorkflowService {
         AssessmentEntity assessment = assessmentRepository.findById(assessmentId)
                 .orElseThrow(() -> new IllegalArgumentException("Assessment not found: " + assessmentId));
 
+        if (candidate == null) {
+            throw new IllegalArgumentException("Candidate layout cannot be null");
+        }
+
+        // Enforce candidate validity:
+        // A solverStatus of OPTIMAL or FEASIBLE requires a non-empty list of placements.
+        // Empty placement lists are only valid for legitimately proven INFEASIBLE or TIMEOUT outcomes.
+        boolean hasPlacements = candidate.getPlacements() != null && !candidate.getPlacements().isEmpty();
+        String solverStatus = candidate.getSolverStatus() != null ? candidate.getSolverStatus().toUpperCase() : "UNKNOWN";
+        if (!hasPlacements && ("OPTIMAL".equals(solverStatus) || "FEASIBLE".equals(solverStatus))) {
+            throw new IllegalArgumentException("Candidate layout cannot have empty placements with solverStatus=" + solverStatus);
+        }
+
         try {
-            String placementsJson = objectMapper.writeValueAsString(candidate.getPlacements());
+            String placementsJson = objectMapper.writeValueAsString(candidate.getPlacements() != null ? candidate.getPlacements() : List.of());
             String computedDigest = DigestUtils.sha256Hex(placementsJson);
 
             CandidateLayoutEntity layout = new CandidateLayoutEntity(
@@ -78,6 +94,9 @@ public class AssessmentWorkflowService {
             assessment.setCandidateLayoutId(layout.getLayoutId());
             assessment.setCandidateLayoutVersion(layout.getLayoutVersion());
             assessment.setCandidateContentDigest(computedDigest);
+            // Any new candidate layout invalidates prior validation
+            assessment.setValidationId(null);
+            assessment.setValidationPassed(false);
             assessment.setWorkflowStatus("CANDIDATE_READY");
             assessment.setUpdatedAt(Instant.now());
             return assessmentRepository.save(assessment);
@@ -91,10 +110,67 @@ public class AssessmentWorkflowService {
         AssessmentEntity assessment = assessmentRepository.findById(assessmentId)
                 .orElseThrow(() -> new IllegalArgumentException("Assessment not found: " + assessmentId));
 
-        assessment.setValidationId(validation.getValidationId());
-        assessment.setValidationPassed(validation.isPassed());
+        if (validation == null || validation.getValidationId() == null || validation.getValidationId().isBlank()) {
+            throw new IllegalArgumentException("Validation ID is required");
+        }
 
-        if (validation.isPassed()) {
+        // Idempotency check: if this exact validation record was already processed for this assessment, return current state
+        if (validation.getValidationId().equals(assessment.getValidationId())) {
+            log.info("Validation [{}] already recorded for assessment [{}]. Returning idempotent assessment state.",
+                    validation.getValidationId(), assessmentId);
+            return assessment;
+        }
+
+        // Authoritative verification: Retrieve persisted record directly from validation-service
+        java.util.Optional<ValidationResultDto> authoritativeOpt = validationClient.getValidationRun(validation.getValidationId());
+        if (authoritativeOpt.isEmpty()) {
+            throw new IllegalArgumentException("Fabricated or non-existent validation ID: " + validation.getValidationId());
+        }
+
+        ValidationResultDto authoritative = authoritativeOpt.get();
+
+        // 1. Verify candidate layout binding
+        if (authoritative.getCandidateLayoutId() != null && assessment.getCandidateLayoutId() != null
+                && !authoritative.getCandidateLayoutId().equals(assessment.getCandidateLayoutId())) {
+            throw new IllegalStateException("Validation record is bound to layout [" + authoritative.getCandidateLayoutId()
+                    + "] but assessment current layout is [" + assessment.getCandidateLayoutId() + "]");
+        }
+
+        // 2. Verify candidate layout version binding (reject stale validation for older candidate revision)
+        if (authoritative.getCandidateLayoutVersion() > 0
+                && authoritative.getCandidateLayoutVersion() != assessment.getCandidateLayoutVersion()) {
+            throw new IllegalStateException("Validation record is bound to candidate version ["
+                    + authoritative.getCandidateLayoutVersion() + "] but assessment is at version ["
+                    + assessment.getCandidateLayoutVersion() + "]");
+        }
+
+        // 3. Verify candidate content digest matches authoritative validation
+        if (authoritative.getCandidateContentDigest() != null && !authoritative.getCandidateContentDigest().isBlank()) {
+            if (!authoritative.getCandidateContentDigest().equals(assessment.getCandidateContentDigest())) {
+                throw new IllegalStateException("Candidate content digest mismatch. Validation digest ["
+                        + authoritative.getCandidateContentDigest() + "] != assessment digest ["
+                        + assessment.getCandidateContentDigest() + "]");
+            }
+        }
+
+        // 4. Verify rule snapshot binding
+        if (authoritative.getRuleSnapshotId() != null && !authoritative.getRuleSnapshotId().isBlank()
+                && !"none".equalsIgnoreCase(authoritative.getRuleSnapshotId())) {
+            if (!authoritative.getRuleSnapshotId().equalsIgnoreCase(assessment.getRuleSnapshotId())) {
+                throw new IllegalStateException("Rule snapshot mismatch. Validation evaluated snapshot ["
+                        + authoritative.getRuleSnapshotId() + "] but assessment pinned snapshot is ["
+                        + assessment.getRuleSnapshotId() + "]");
+            }
+        }
+
+        // 5. Verify authoritative pass/fail status and findings (reject caller-forged passed=true)
+        boolean authoritativePassed = authoritative.isPassed()
+                && (authoritative.getFindings() == null || authoritative.getFindings().isEmpty());
+
+        assessment.setValidationId(authoritative.getValidationId());
+        assessment.setValidationPassed(authoritativePassed);
+
+        if (authoritativePassed) {
             assessment.setWorkflowStatus("PENDING_APPROVAL");
         } else {
             assessment.setWorkflowStatus("VALIDATION_FAILED");
@@ -113,7 +189,7 @@ public class AssessmentWorkflowService {
             throw new IllegalStateException("Assessment cannot be approved in current state: " + assessment.getWorkflowStatus());
         }
 
-        if (!assessment.isValidationPassed()) {
+        if (!assessment.isValidationPassed() || assessment.getValidationId() == null) {
             throw new IllegalStateException("Cannot approve candidate: independent validation has not passed");
         }
 

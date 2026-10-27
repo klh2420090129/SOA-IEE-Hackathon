@@ -8,6 +8,11 @@ public class ValidationResultDto {
     private String validatorVersion;
     private int evaluatedRulesCount;
     private List<ValidationFindingDto> findings;
+    private String candidateLayoutId;
+    private int candidateLayoutVersion;
+    private String candidateContentDigest;
+    private String ruleSnapshotId;
+    private String ruleSnapshotDigest;
 
     public ValidationResultDto() {
     }
@@ -34,4 +39,19 @@ public class ValidationResultDto {
 
     public List<ValidationFindingDto> getFindings() { return findings; }
     public void setFindings(List<ValidationFindingDto> findings) { this.findings = findings; }
+
+    public String getCandidateLayoutId() { return candidateLayoutId; }
+    public void setCandidateLayoutId(String candidateLayoutId) { this.candidateLayoutId = candidateLayoutId; }
+
+    public int getCandidateLayoutVersion() { return candidateLayoutVersion; }
+    public void setCandidateLayoutVersion(int candidateLayoutVersion) { this.candidateLayoutVersion = candidateLayoutVersion; }
+
+    public String getCandidateContentDigest() { return candidateContentDigest; }
+    public void setCandidateContentDigest(String candidateContentDigest) { this.candidateContentDigest = candidateContentDigest; }
+
+    public String getRuleSnapshotId() { return ruleSnapshotId; }
+    public void setRuleSnapshotId(String ruleSnapshotId) { this.ruleSnapshotId = ruleSnapshotId; }
+
+    public String getRuleSnapshotDigest() { return ruleSnapshotDigest; }
+    public void setRuleSnapshotDigest(String ruleSnapshotDigest) { this.ruleSnapshotDigest = ruleSnapshotDigest; }
 }

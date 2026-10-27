@@ -14,7 +14,9 @@ public class ValidationRunEntity {
 
     private String candidateLayoutId;
     private int candidateLayoutVersion;
+    private String candidateContentDigest;
     private String ruleSnapshotId;
+    private String ruleSnapshotDigest;
     private boolean passed;
     private String validatorVersion;
     private int findingsCount;
@@ -27,12 +29,15 @@ public class ValidationRunEntity {
     public ValidationRunEntity() {}
 
     public ValidationRunEntity(String validationId, String candidateLayoutId, int candidateLayoutVersion,
-                               String ruleSnapshotId, boolean passed, String validatorVersion,
+                               String candidateContentDigest, String ruleSnapshotId, String ruleSnapshotDigest,
+                               boolean passed, String validatorVersion,
                                int findingsCount, String findingsJson) {
         this.validationId = validationId;
         this.candidateLayoutId = candidateLayoutId;
         this.candidateLayoutVersion = candidateLayoutVersion;
+        this.candidateContentDigest = candidateContentDigest;
         this.ruleSnapshotId = ruleSnapshotId;
+        this.ruleSnapshotDigest = ruleSnapshotDigest;
         this.passed = passed;
         this.validatorVersion = validatorVersion;
         this.findingsCount = findingsCount;
@@ -49,8 +54,14 @@ public class ValidationRunEntity {
     public int getCandidateLayoutVersion() { return candidateLayoutVersion; }
     public void setCandidateLayoutVersion(int candidateLayoutVersion) { this.candidateLayoutVersion = candidateLayoutVersion; }
 
+    public String getCandidateContentDigest() { return candidateContentDigest; }
+    public void setCandidateContentDigest(String candidateContentDigest) { this.candidateContentDigest = candidateContentDigest; }
+
     public String getRuleSnapshotId() { return ruleSnapshotId; }
     public void setRuleSnapshotId(String ruleSnapshotId) { this.ruleSnapshotId = ruleSnapshotId; }
+
+    public String getRuleSnapshotDigest() { return ruleSnapshotDigest; }
+    public void setRuleSnapshotDigest(String ruleSnapshotDigest) { this.ruleSnapshotDigest = ruleSnapshotDigest; }
 
     public boolean isPassed() { return passed; }
     public void setPassed(boolean passed) { this.passed = passed; }

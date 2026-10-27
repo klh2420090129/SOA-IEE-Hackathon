@@ -98,6 +98,8 @@ public class CompartmentController {
         try {
             AssessmentEntity updated = workflowService.recordValidationOutcome(id, validation);
             return ResponseEntity.ok(updated);
+        } catch (IllegalStateException e) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("code", "VALIDATION_MISMATCH", "message", e.getMessage()));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("code", "NOT_FOUND", "message", e.getMessage()));
         }

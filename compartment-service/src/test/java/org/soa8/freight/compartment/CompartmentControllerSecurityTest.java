@@ -4,6 +4,7 @@ import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.soa8.freight.common.model.*;
 import org.soa8.freight.common.model.CandidateLayoutDto;
 import org.soa8.freight.common.model.CompartmentDto;
 import org.soa8.freight.common.model.ValidationResultDto;
@@ -39,6 +40,9 @@ class CompartmentControllerSecurityTest {
     @Autowired
     private AssessmentWorkflowService workflowService;
 
+    @org.springframework.boot.test.mock.mockito.MockBean
+    private org.soa8.freight.compartment.client.ValidationServiceClient validationClient;
+
     @Value("${jwt.secret:soa-team8-default-secret-key-must-be-at-least-256-bits-long-for-hmac-sha256!}")
     private String jwtSecret;
 
@@ -68,11 +72,19 @@ class CompartmentControllerSecurityTest {
     void shouldEnforcePlannerRoleOnDecisions() {
         CompartmentDto comp = new CompartmentDto("comp-sec-1", "Standard Trailer", 12000, 2400, 2600, 25000);
         AssessmentEntity assessment = workflowService.createAssessment("decl-sec-001", 1, "snap-001", comp);
+        ItemPlacementDto item = new ItemPlacementDto("pl-sec-1", "it-sec-1", 1, "3", "UN1203", 0, 0, 0, 1000, 1000, 1000, 500, "DEFAULT", false, 0.0);
         CandidateLayoutDto candidate = new CandidateLayoutDto(
-                "layout-sec-1", 1, "comp-sec-1", null, "FEASIBLE", "CONTROLLED_STUB", Collections.emptyList()
+                "layout-sec-1", 1, "comp-sec-1", null, "FEASIBLE", "CONTROLLED_STUB", List.of(item)
         );
         assessment = workflowService.recordCandidateLayout(assessment.getId(), candidate);
+
         ValidationResultDto valPassed = new ValidationResultDto("val-sec-1", true, "1.0.0", 1, Collections.emptyList());
+        valPassed.setCandidateLayoutId("layout-sec-1");
+        valPassed.setCandidateLayoutVersion(1);
+        valPassed.setCandidateContentDigest(assessment.getCandidateContentDigest());
+        valPassed.setRuleSnapshotId("snap-001");
+        org.mockito.Mockito.when(validationClient.getValidationRun("val-sec-1")).thenReturn(java.util.Optional.of(valPassed));
+
         assessment = workflowService.recordValidationOutcome(assessment.getId(), valPassed);
 
         CompartmentController.DecisionRequest req = new CompartmentController.DecisionRequest();
@@ -109,13 +121,22 @@ class CompartmentControllerSecurityTest {
     void shouldBlockApprovalWhenValidationFailed() {
         CompartmentDto comp = new CompartmentDto("comp-sec-2", "Standard Trailer", 12000, 2400, 2600, 25000);
         AssessmentEntity assessment = workflowService.createAssessment("decl-sec-002", 1, "snap-001", comp);
+        ItemPlacementDto item = new ItemPlacementDto("pl-sec-2", "it-sec-2", 1, "3", "UN1203", 0, 0, 0, 1000, 1000, 1000, 500, "DEFAULT", false, 0.0);
         CandidateLayoutDto candidate = new CandidateLayoutDto(
-                "layout-sec-2", 1, "comp-sec-2", null, "FEASIBLE", "CONTROLLED_STUB", Collections.emptyList()
+                "layout-sec-2", 1, "comp-sec-2", null, "FEASIBLE", "CONTROLLED_STUB", List.of(item)
         );
         assessment = workflowService.recordCandidateLayout(assessment.getId(), candidate);
         
         // Record validation failed
-        ValidationResultDto valFailed = new ValidationResultDto("val-failed-1", false, "1.0.0", 1, Collections.emptyList());
+        ValidationResultDto valFailed = new ValidationResultDto("val-failed-1", false, "1.0.0", 1, List.of(
+                new ValidationFindingDto("CRITICAL", "HAZARD_SEGREGATION_VIOLATION", "Violation", List.of("it-sec-2"))
+        ));
+        valFailed.setCandidateLayoutId("layout-sec-2");
+        valFailed.setCandidateLayoutVersion(1);
+        valFailed.setCandidateContentDigest(assessment.getCandidateContentDigest());
+        valFailed.setRuleSnapshotId("snap-001");
+        org.mockito.Mockito.when(validationClient.getValidationRun("val-failed-1")).thenReturn(java.util.Optional.of(valFailed));
+
         assessment = workflowService.recordValidationOutcome(assessment.getId(), valFailed);
         assertThat(assessment.getWorkflowStatus()).isEqualTo("VALIDATION_FAILED");
 
