@@ -60,10 +60,30 @@ public class OptimizationResultConsumer {
             return;
         }
 
-        // Schema validation
-        if (resultDto.getJobId() == null || resultDto.getAttemptId() == null || resultDto.getResultId() == null) {
+        // Schema and mandatory field validation
+        if (resultDto.getJobId() == null || resultDto.getJobId().isBlank()
+                || resultDto.getAttemptId() == null || resultDto.getAttemptId().isBlank()
+                || resultDto.getResultId() == null || resultDto.getResultId().isBlank()) {
             log.error("Rejecting malformed optimization result: missing mandatory jobId/attemptId/resultId");
-            sendToDeadLetterQueue("VALIDATION_ERROR", payload, "Missing mandatory fields");
+            sendToDeadLetterQueue("VALIDATION_ERROR", payload, "Missing mandatory fields (jobId/attemptId/resultId)");
+            return;
+        }
+
+        // Validate solverStatus is present and a valid SolverStatus enum value
+        String rawSolverStatus = resultDto.getSolverStatus();
+        if (rawSolverStatus == null || rawSolverStatus.isBlank()) {
+            log.error("Rejecting malformed optimization result for job [{}]: missing mandatory solverStatus", resultDto.getJobId());
+            sendToDeadLetterQueue("VALIDATION_ERROR", payload, "Missing mandatory solverStatus");
+            return;
+        }
+
+        SolverStatus parsedSolverStatus;
+        try {
+            parsedSolverStatus = SolverStatus.valueOf(rawSolverStatus.trim().toUpperCase());
+        } catch (IllegalArgumentException e) {
+            log.error("Rejecting malformed optimization result for job [{}]: unrecognized solverStatus [{}]",
+                    resultDto.getJobId(), rawSolverStatus);
+            sendToDeadLetterQueue("VALIDATION_ERROR", payload, "Invalid solverStatus value: " + rawSolverStatus);
             return;
         }
 
@@ -121,7 +141,7 @@ public class OptimizationResultConsumer {
                 1,
                 job.getCompartmentId(),
                 resultDto.getContentDigest() != null ? resultDto.getContentDigest() : "worker-digest",
-                resultDto.getSolverStatus() != null ? resultDto.getSolverStatus() : SolverStatus.FEASIBLE.name(),
+                parsedSolverStatus.name(),
                 resultDto.getProvenance() != null ? resultDto.getProvenance() : "PYTHON_WORKER",
                 resultDto.getPlacements() != null ? resultDto.getPlacements() : java.util.List.of()
         );
@@ -137,11 +157,11 @@ public class OptimizationResultConsumer {
         try {
             String candidateJson = objectMapper.writeValueAsString(candidateLayout);
             job.setResultJson(candidateJson);
-            job.setSolverStatus(resultDto.getSolverStatus() != null ? resultDto.getSolverStatus() : SolverStatus.UNKNOWN.name());
+            job.setSolverStatus(parsedSolverStatus.name());
             job.setProvenance(resultDto.getProvenance() != null ? resultDto.getProvenance() : "PYTHON_WORKER");
             job.setExecutionDurationMs(resultDto.getExecutionDurationMs());
 
-            if (SolverStatus.TIMEOUT.name().equalsIgnoreCase(resultDto.getSolverStatus())) {
+            if (parsedSolverStatus == SolverStatus.TIMEOUT) {
                 job.transitionTo(JobStatus.TIMEOUT);
             } else {
                 job.transitionTo(JobStatus.COMPLETED);

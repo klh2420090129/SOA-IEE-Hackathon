@@ -8,6 +8,7 @@ from typing import Dict, Any
 
 from kafka import KafkaConsumer, KafkaProducer
 from heuristic_solver import solve_3d_packing
+from dedup_store import WorkerDeduplicationStore
 
 logging.basicConfig(
     level=logging.INFO,
@@ -19,6 +20,7 @@ BOOTSTRAP_SERVERS = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 COMMAND_TOPIC = os.environ.get("OPTIMIZATION_COMMAND_TOPIC", "soa.s06.t08.optimization.commands")
 RESULT_TOPIC = os.environ.get("OPTIMIZATION_RESULT_TOPIC", "soa.s06.t08.optimization.results")
 CONSUMER_GROUP = os.environ.get("WORKER_CONSUMER_GROUP", "optimizer-worker-python-group")
+DB_PATH = os.environ.get("WORKER_DB_PATH")
 
 running = True
 
@@ -34,6 +36,9 @@ def run_worker():
     global running
     logger.info("Initializing Python Optimizer Worker connecting to %s", BOOTSTRAP_SERVERS)
     logger.info("Command Topic: %s | Result Topic: %s", COMMAND_TOPIC, RESULT_TOPIC)
+
+    store = WorkerDeduplicationStore(db_path=DB_PATH)
+    logger.info("Worker deduplication store initialized at %s", store.db_path)
 
     producer = None
     consumer = None
@@ -59,8 +64,6 @@ def run_worker():
         logger.info("Worker consumer successfully subscribed to topic %s", COMMAND_TOPIC)
     except Exception as e:
         logger.error("Failed to connect to Kafka: %s. Worker running in polling retry loop.", e)
-
-    processed_ids = set()
 
     while running:
         if not consumer or not producer:
@@ -98,25 +101,46 @@ def run_worker():
                     logger.info("Processing optimization command [%s] for jobId [%s] attempt [%s]",
                                 command_id, job_id, attempt_id)
 
-                    # Deduplication of command in-worker
-                    if command_id and command_id in processed_ids:
-                        logger.warning("Command [%s] already processed by this worker. Committing offset.", command_id)
+                    if not command_id:
+                        logger.warning("Rejecting command missing commandId. Committing offset.")
                         consumer.commit()
                         continue
 
+                    # Check persistent deduplication store
+                    existing = store.get_command_status(command_id)
+                    if existing:
+                        status = existing["status"]
+                        if status == "COMPLETED":
+                            logger.info("Command [%s] already fully processed and completed. Committing offset.", command_id)
+                            consumer.commit()
+                            continue
+                        elif status == "PUBLISHED":
+                            # Crash recovery: Result was published but offset was not committed
+                            logger.info("Command [%s] was published previously. Republishing cached result to guarantee delivery.", command_id)
+                            if existing.get("result_json"):
+                                producer.send(RESULT_TOPIC, key=job_id, value=existing["result_json"])
+                                producer.flush()
+                            store.record_completed(command_id)
+                            consumer.commit()
+                            continue
+
                     # Execute deterministic packing heuristic
                     result = solve_3d_packing(command)
+                    result_id = result.get("resultId")
 
-                    # Dispatch result to RESULT_TOPIC keyed by jobId
+                    # Step 1: Dispatch result to RESULT_TOPIC keyed by jobId with durable acknowledgment
                     producer.send(RESULT_TOPIC, key=job_id, value=result)
                     producer.flush()
 
-                    logger.info("Dispatched result [%s] for jobId [%s] status [%s] duration [%d ms]",
-                                result.get("resultId"), job_id, result.get("solverStatus"), result.get("executionDurationMs", 0))
+                    # Step 2: Record PUBLISHED in durable SQLite store BEFORE committing offset
+                    store.record_published(command_id, job_id, attempt_id, result_id, result)
 
-                    if command_id:
-                        processed_ids.add(command_id)
+                    # Step 3: Record COMPLETED and commit Kafka offset
+                    store.record_completed(command_id)
                     consumer.commit()
+
+                    logger.info("Successfully completed command [%s], dispatched result [%s] (solverStatus=%s)",
+                                command_id, result_id, result.get("solverStatus"))
 
         except Exception as e:
             if running:
@@ -131,3 +155,4 @@ def run_worker():
 
 if __name__ == "__main__":
     run_worker()
+

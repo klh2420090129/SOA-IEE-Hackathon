@@ -207,4 +207,119 @@ class OptimizationAsyncWorkflowTest {
         assertThat(failedJob.getStatus()).isEqualTo(JobStatus.FAILED);
         assertThat(failedJob.getErrorMessage()).contains("Rule snapshot mismatch");
     }
+
+    @Test
+    @DisplayName("5. Missing or invalid worker solverStatus is rejected fail-closed and cannot become feasible")
+    void testMissingOrInvalidSolverStatusRejected() throws Exception {
+        OptimizationJobEntity job = jobService.submitJobDurable(
+                "decl-async-005",
+                new CompartmentDto("comp-test-1", "Standard Trailer", 12000, 2400, 2600, 25000),
+                List.of(new CargoItemDto("it-1", "Drums", "3", "UN1993", 1000, 1000, 1000, 400, true, 800, 1)),
+                null,
+                "snap-2026-q4-v1",
+                "PYTHON_WORKER",
+                20
+        );
+
+        // Result missing solverStatus entirely
+        OptimizationResultDto nullStatusResult = new OptimizationResultDto(
+                "res-null-status",
+                job.getJobId(),
+                job.getCurrentAttemptId(),
+                job.getCorrelationId(),
+                null, // Null solverStatus!
+                "PYTHON_HEURISTIC_EP_3D_V1",
+                150L,
+                "snap-2026-q4-v1",
+                "digest-123",
+                "cand-digest-abc",
+                List.of(),
+                List.of(),
+                Map.of(),
+                null
+        );
+
+        resultConsumer.consumeOptimizationResult(objectMapper.writeValueAsString(nullStatusResult));
+
+        OptimizationJobEntity currentJob = jobRepository.findById(job.getJobId()).orElseThrow();
+        // Job must NOT be marked COMPLETED or FEASIBLE
+        assertThat(currentJob.getStatus()).isEqualTo(JobStatus.SUBMITTED);
+        assertThat(currentJob.getSolverStatus()).isEqualTo("UNKNOWN");
+
+        // Result with invalid garbage solverStatus
+        OptimizationResultDto invalidStatusResult = new OptimizationResultDto(
+                "res-invalid-status",
+                job.getJobId(),
+                job.getCurrentAttemptId(),
+                job.getCorrelationId(),
+                "INVALID_STATUS_VALUE",
+                "PYTHON_HEURISTIC_EP_3D_V1",
+                150L,
+                "snap-2026-q4-v1",
+                "digest-123",
+                "cand-digest-abc",
+                List.of(),
+                List.of(),
+                Map.of(),
+                null
+        );
+
+        resultConsumer.consumeOptimizationResult(objectMapper.writeValueAsString(invalidStatusResult));
+
+        OptimizationJobEntity stillCurrentJob = jobRepository.findById(job.getJobId()).orElseThrow();
+        assertThat(stillCurrentJob.getStatus()).isEqualTo(JobStatus.SUBMITTED);
+        assertThat(stillCurrentJob.getSolverStatus()).isEqualTo("UNKNOWN");
+    }
+
+    @Test
+    @DisplayName("6. Timeout recovery transitions expired jobs to TIMEOUT and late results are rejected")
+    void testTimeoutRecoveryAndLateResultRejection() throws Exception {
+        OptimizationJobEntity job = jobService.submitJobDurable(
+                "decl-async-006",
+                new CompartmentDto("comp-test-1", "Standard Trailer", 12000, 2400, 2600, 25000),
+                List.of(new CargoItemDto("it-1", "Drums", "3", "UN1993", 1000, 1000, 1000, 400, true, 800, 1)),
+                null,
+                "snap-2026-q4-v1",
+                "PYTHON_WORKER",
+                2 // 2 seconds deadline
+        );
+
+        // Fast-forward or backdate created time to simulate expiration
+        job.setCreatedAt(java.time.Instant.now().minusSeconds(10));
+        jobRepository.save(job);
+
+        // Execute recovery sweep
+        int timedOutCount = jobService.recoverStuckJobs();
+        assertThat(timedOutCount).isGreaterThanOrEqualTo(1);
+
+        OptimizationJobEntity timedOutJob = jobRepository.findById(job.getJobId()).orElseThrow();
+        assertThat(timedOutJob.getStatus()).isEqualTo(JobStatus.TIMEOUT);
+        assertThat(timedOutJob.getSolverStatus()).isEqualTo("TIMEOUT");
+
+        // Late worker result arrives after timeout
+        OptimizationResultDto lateResult = new OptimizationResultDto(
+                "res-late-001",
+                job.getJobId(),
+                job.getCurrentAttemptId(),
+                job.getCorrelationId(),
+                "FEASIBLE",
+                "PYTHON_HEURISTIC_EP_3D_V1",
+                5000L,
+                "snap-2026-q4-v1",
+                "digest-123",
+                "cand-digest-abc",
+                List.of(),
+                List.of(),
+                Map.of(),
+                null
+        );
+
+        resultConsumer.consumeOptimizationResult(objectMapper.writeValueAsString(lateResult));
+
+        OptimizationJobEntity postLateResultJob = jobRepository.findById(job.getJobId()).orElseThrow();
+        // Preserves terminal TIMEOUT state and cannot be overwritten
+        assertThat(postLateResultJob.getStatus()).isEqualTo(JobStatus.TIMEOUT);
+        assertThat(postLateResultJob.getSolverStatus()).isEqualTo("TIMEOUT");
+    }
 }
+

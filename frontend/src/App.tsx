@@ -35,6 +35,13 @@ interface ItemPlacement {
   orientation?: string;
 }
 
+interface UnassignedItem {
+  cargoItemId: string;
+  instanceIndex: number;
+  reasonCode: string;
+  reasonDescription: string;
+}
+
 interface LayoutData {
   layoutId: string;
   layoutVersion: number;
@@ -43,7 +50,9 @@ interface LayoutData {
   solverStatus: string;
   provenance: string;
   placements: ItemPlacement[];
+  unassignedItems?: UnassignedItem[];
 }
+
 
 interface ValidationFinding {
   severity: string;
@@ -280,10 +289,15 @@ export default function App() {
         }
       }
 
+      if (jobStatus !== 'COMPLETED') {
+        throw new Error(`Optimization job ${jobId.slice(0, 8)} is still processing (${jobStatus}) after ${maxPollAttempts}s polling timeout. Safe retry available without re-creating jobs.`);
+      }
+
       const layoutResultRes = await fetch(`/api/v1/optimization-jobs/${jobId}/result`);
       if (!layoutResultRes.ok) {
         throw new Error(`Layout retrieval failed (HTTP ${layoutResultRes.status})`);
       }
+
       const layoutData: LayoutData = await layoutResultRes.json();
       setLayout(layoutData);
 
@@ -552,6 +566,14 @@ export default function App() {
                     Workflow: {assessment.workflowStatus}
                   </span>
 
+                  {/* Authoritative Solver Outcome Status */}
+                  {layout && (
+                    <span className={`badge badge-${layout.solverStatus === 'FEASIBLE' ? (layout.unassignedItems && layout.unassignedItems.length > 0 ? 'review-required' : 'approved') : 'validation-failed'}`}>
+                      <Cpu size={13} />
+                      Solver: {layout.solverStatus} {layout.unassignedItems && layout.unassignedItems.length > 0 ? '(PARTIAL)' : '(COMPLETE)'}
+                    </span>
+                  )}
+
                   {/* Independent Validation Status */}
                   {validation ? (
                     <span className={`badge badge-${validation.passed ? 'approved' : 'validation-failed'}`}>
@@ -566,6 +588,17 @@ export default function App() {
                     <span className="badge badge-draft">Validation: PENDING</span>
                   )}
                 </div>
+
+                {layout && layout.unassignedItems && layout.unassignedItems.length > 0 && (
+                  <div style={{
+                    marginBottom: '10px', padding: '8px 12px', borderRadius: '6px',
+                    background: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.3)',
+                    color: '#fbbf24', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '8px'
+                  }}>
+                    <AlertTriangle size={15} />
+                    <span><strong>Partial Feasible Layout:</strong> {layout.placements?.length || 0} unit(s) placed, {layout.unassignedItems.length} unit(s) unassigned due to compartment capacity or safety constraints. This is a partial layout, not a complete loading plan.</span>
+                  </div>
+                )}
 
                 <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
                   Declaration <strong style={{ color: 'var(--text-main)' }}>{assessment.declarationId?.slice(0, 8)} (v{assessment.declarationVersion})</strong> &bull; Rule Snapshot <strong style={{ color: 'var(--text-main)' }}>{assessment.ruleSnapshotId}</strong> &bull; Digest: <code style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: 'var(--accent-secondary)' }}>{assessment.candidateContentDigest?.slice(0, 16)}...</code>
@@ -650,40 +683,89 @@ export default function App() {
                   <p>No declaration active. Click "Run Live Vertical Slice Assessment" above to initialize.</p>
                 </div>
               ) : (
-                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.9rem' }}>
-                  <thead>
-                    <tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)' }}>
-                      <th style={{ padding: '10px 8px' }}>Item ID</th>
-                      <th style={{ padding: '10px 8px' }}>Description</th>
-                      <th style={{ padding: '10px 8px' }}>Hazard Class</th>
-                      <th style={{ padding: '10px 8px' }}>UN Number</th>
-                      <th style={{ padding: '10px 8px' }}>Dimensions</th>
-                      <th style={{ padding: '10px 8px' }}>Weight</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {items.map(it => (
-                      <tr key={it.cargoItemId} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                        <td style={{ padding: '12px 8px', fontFamily: 'var(--font-mono)' }}>{it.cargoItemId}</td>
-                        <td style={{ padding: '12px 8px', fontWeight: 500 }}>{it.description}</td>
-                        <td style={{ padding: '12px 8px' }}>
-                          <span style={{ 
-                            background: it.hazardClass === '1' ? 'rgba(239, 68, 68, 0.2)' : 'rgba(245, 158, 11, 0.2)',
-                            color: it.hazardClass === '1' ? '#f87171' : '#fbbf24',
-                            padding: '2px 8px', borderRadius: '4px', fontWeight: 600, fontSize: '0.8rem'
-                          }}>
-                            Class {it.hazardClass}
-                          </span>
-                        </td>
-                        <td style={{ padding: '12px 8px', fontFamily: 'var(--font-mono)' }}>{it.unNumber}</td>
-                        <td style={{ padding: '12px 8px' }}>{it.lengthMm} × {it.widthMm} × {it.heightMm} mm</td>
-                        <td style={{ padding: '12px 8px' }}>{it.weightKg} kg</td>
+                <>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.9rem' }}>
+                    <thead>
+                      <tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)' }}>
+                        <th style={{ padding: '10px 8px' }}>Item ID</th>
+                        <th style={{ padding: '10px 8px' }}>Description</th>
+                        <th style={{ padding: '10px 8px' }}>Hazard</th>
+                        <th style={{ padding: '10px 8px' }}>Dimensions</th>
+                        <th style={{ padding: '10px 8px' }}>Weight</th>
+                        <th style={{ padding: '10px 8px' }}>Placement Status</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {items.map(it => {
+                        const placedCount = layout?.placements?.filter(p => p.cargoItemId === it.cargoItemId).length || 0;
+                        const unassignedCount = layout?.unassignedItems?.filter(u => u.cargoItemId === it.cargoItemId).length || 0;
+                        const isFullyPlaced = placedCount >= it.quantity;
+                        const isPartiallyPlaced = placedCount > 0 && placedCount < it.quantity;
+                        return (
+                          <tr key={it.cargoItemId} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                            <td style={{ padding: '12px 8px', fontFamily: 'var(--font-mono)' }}>{it.cargoItemId}</td>
+                            <td style={{ padding: '12px 8px', fontWeight: 500 }}>{it.description}</td>
+                            <td style={{ padding: '12px 8px' }}>
+                              <span style={{ 
+                                background: it.hazardClass === '1' ? 'rgba(239, 68, 68, 0.2)' : 'rgba(245, 158, 11, 0.2)',
+                                color: it.hazardClass === '1' ? '#f87171' : '#fbbf24',
+                                padding: '2px 8px', borderRadius: '4px', fontWeight: 600, fontSize: '0.8rem'
+                              }}>
+                                Class {it.hazardClass} ({it.unNumber})
+                              </span>
+                            </td>
+                            <td style={{ padding: '12px 8px' }}>{it.lengthMm} × {it.widthMm} × {it.heightMm} mm</td>
+                            <td style={{ padding: '12px 8px' }}>{it.weightKg} kg</td>
+                            <td style={{ padding: '12px 8px' }}>
+                              {!layout ? (
+                                <span className="badge badge-draft">PENDING</span>
+                              ) : isFullyPlaced ? (
+                                <span className="badge badge-approved">PLACED ({placedCount}/{it.quantity})</span>
+                              ) : isPartiallyPlaced ? (
+                                <span className="badge badge-review-required">PARTIAL ({placedCount}/{it.quantity})</span>
+                              ) : (
+                                <span className="badge badge-validation-failed">UNASSIGNED ({unassignedCount || it.quantity})</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+
+                  {layout && layout.unassignedItems && layout.unassignedItems.length > 0 && (
+                    <div style={{ marginTop: '20px', borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
+                      <h4 style={{ fontSize: '0.95rem', color: '#f87171', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <AlertOctagon size={16} /> Unassigned Physical Units ({layout.unassignedItems.length})
+                      </h4>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
+                        <thead>
+                          <tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)' }}>
+                            <th style={{ padding: '8px' }}>Cargo Item</th>
+                            <th style={{ padding: '8px' }}>Unit #</th>
+                            <th style={{ padding: '8px' }}>Reason Code</th>
+                            <th style={{ padding: '8px' }}>Reason Description</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {layout.unassignedItems.map((u, idx) => (
+                            <tr key={idx} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                              <td style={{ padding: '8px', fontWeight: 600 }}>{u.cargoItemId}</td>
+                              <td style={{ padding: '8px', fontFamily: 'var(--font-mono)' }}>Unit {u.instanceIndex + 1}</td>
+                              <td style={{ padding: '8px' }}>
+                                <span className="badge badge-validation-failed">{u.reasonCode}</span>
+                              </td>
+                              <td style={{ padding: '8px', color: '#fca5a5' }}>{u.reasonDescription}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </>
               )}
             </div>
+
 
             {/* Independent Validation Engine Panel */}
             <div className="glass-panel" style={{ padding: '24px' }}>
@@ -863,22 +945,61 @@ export default function App() {
                       );
                     })}
 
-                    {/* Segregation Distance Marker if 2 items placed */}
-                    {layout.placements.length >= 2 && (() => {
-                      const p0 = layout.placements[0];
-                      const p1 = layout.placements[1];
-                      const x0 = 50 + ((p0.xMm !== undefined ? p0.xMm : (p0.xmm || 0)) * 0.075) + ((p0.lengthMm * 0.075) / 2);
-                      const x1 = 50 + ((p1.xMm !== undefined ? p1.xMm : (p1.xmm || 0)) * 0.075) + ((p1.lengthMm * 0.075) / 2);
-                      const y0 = 160;
+                    {/* Dynamic Segregation / Hazard Violation Markers from Actual Backend Validation Findings */}
+                    {(() => {
+                      if (!validation) {
+                        return (
+                          <g>
+                            <text x="60" y="285" fill="#94a3b8" fontSize="11" fontFamily="sans-serif">
+                              Validation status: PENDING — No verification findings available yet.
+                            </text>
+                          </g>
+                        );
+                      }
+
+                      const segViolations = validation.findings?.filter(f =>
+                        f.code === 'HAZARD_SEGREGATION_VIOLATION' || f.code === 'HAZARD_COLOAD_FORBIDDEN'
+                      ) || [];
+
+                      if (segViolations.length === 0) {
+                        return (
+                          <g>
+                            <text x="60" y="285" fill="#34d399" fontSize="11" fontFamily="sans-serif" fontWeight="bold">
+                              ✓ Validation Passed: Compliant Placement & Segregation
+                            </text>
+                          </g>
+                        );
+                      }
+
                       return (
                         <g>
-                          <line x1={x0} y1={y0} x2={x1} y2={y0} stroke="#ef4444" strokeWidth="2" strokeDasharray="4 4" />
-                          <circle cx={x0} cy={y0} r="3" fill="#ef4444" />
-                          <circle cx={x1} cy={y0} r="3" fill="#ef4444" />
-                          <rect x={(x0 + x1)/2 - 80} y={y0 - 24} width="160" height="20" fill="rgba(15, 23, 42, 0.9)" stroke="#ef4444" rx="4" />
-                          <text x={(x0 + x1)/2} y={y0 - 10} fill="#fca5a5" fontSize="10" fontWeight="bold" textAnchor="middle" fontFamily="monospace">
-                            Separation: ~1,109mm (VIOLATION &lt; 3000mm)
-                          </text>
+                          {segViolations.map((v, vIdx) => {
+                            const involved = v.involvedItemIds || [];
+                            const p0 = layout.placements.find(p => involved.includes(p.cargoItemId));
+                            const p1 = layout.placements.filter(p => involved.includes(p.cargoItemId))[1];
+
+                            if (p0 && p1) {
+                              const x0 = 50 + ((p0.xMm !== undefined ? p0.xMm : (p0.xmm || 0)) * 0.075) + ((p0.lengthMm * 0.075) / 2);
+                              const x1 = 50 + ((p1.xMm !== undefined ? p1.xMm : (p1.xmm || 0)) * 0.075) + ((p1.lengthMm * 0.075) / 2);
+                              const yPos = 160 + (vIdx * 30);
+                              return (
+                                <g key={vIdx}>
+                                  <line x1={x0} y1={yPos} x2={x1} y2={yPos} stroke="#ef4444" strokeWidth="2" strokeDasharray="4 4" />
+                                  <circle cx={x0} cy={yPos} r="3" fill="#ef4444" />
+                                  <circle cx={x1} cy={yPos} r="3" fill="#ef4444" />
+                                  <rect x={Math.min(x0, x1)} y={yPos - 22} width={Math.max(Math.abs(x1 - x0), 180)} height="20" fill="rgba(15, 23, 42, 0.95)" stroke="#ef4444" rx="4" />
+                                  <text x={(x0 + x1)/2} y={yPos - 8} fill="#fca5a5" fontSize="10" fontWeight="bold" textAnchor="middle" fontFamily="monospace">
+                                    {v.code}: {v.message.slice(0, 50)}...
+                                  </text>
+                                </g>
+                              );
+                            }
+                            return (
+                              <text key={vIdx} x="60" y={285 + (vIdx * 15)} fill="#f87171" fontSize="11" fontFamily="sans-serif">
+                                ⚠ {v.code}: {v.message}
+                              </text>
+                            );
+                          })}
                         </g>
                       );
                     })()}
@@ -923,9 +1044,41 @@ export default function App() {
                     </tbody>
                   </table>
                 </div>
+
+                {/* Tab 2 Unassigned Units Section */}
+                {layout.unassignedItems && layout.unassignedItems.length > 0 && (
+                  <div style={{ marginTop: '20px', borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
+                    <h4 style={{ fontSize: '0.95rem', color: '#fbbf24', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <AlertTriangle size={16} /> Unassigned Cargo Units ({layout.unassignedItems.length})
+                    </h4>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
+                      <thead>
+                        <tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)' }}>
+                          <th style={{ padding: '8px' }}>Cargo Item ID</th>
+                          <th style={{ padding: '8px' }}>Instance</th>
+                          <th style={{ padding: '8px' }}>Reason Code</th>
+                          <th style={{ padding: '8px' }}>Explanation</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {layout.unassignedItems.map((u, idx) => (
+                          <tr key={idx} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                            <td style={{ padding: '8px', fontWeight: 600 }}>{u.cargoItemId}</td>
+                            <td style={{ padding: '8px', fontFamily: 'var(--font-mono)' }}>Unit #{u.instanceIndex + 1}</td>
+                            <td style={{ padding: '8px' }}>
+                              <span className="badge badge-validation-failed">{u.reasonCode}</span>
+                            </td>
+                            <td style={{ padding: '8px', color: '#fca5a5' }}>{u.reasonDescription}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             )}
           </div>
+
         )}
 
         {/* Tab 3: Audit & Outbox */}

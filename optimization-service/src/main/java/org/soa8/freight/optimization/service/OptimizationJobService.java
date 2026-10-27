@@ -142,4 +142,49 @@ public class OptimizationJobService {
             }
         });
     }
+
+    /**
+     * Scheduled or manual recovery mechanism for stuck jobs beyond execution deadline.
+     * Detects jobs in SUBMITTED or RUNNING status whose deadline (startedAt/createdAt + timeLimitSeconds)
+     * has elapsed. Transitions them to terminal TIMEOUT status with concurrency safety.
+     *
+     * @return Number of jobs transitioned to TIMEOUT
+     */
+    @Transactional
+    public int recoverStuckJobs() {
+        Instant now = Instant.now();
+        List<OptimizationJobEntity> activeJobs = jobRepository.findByStatusIn(List.of(JobStatus.SUBMITTED, JobStatus.RUNNING));
+        int timedOutCount = 0;
+
+        for (OptimizationJobEntity job : activeJobs) {
+            int budgetSeconds = (job.getTimeLimitSeconds() != null && job.getTimeLimitSeconds() > 0)
+                    ? job.getTimeLimitSeconds() : 20;
+
+            // Anchor deadline calculation to startedAt if running, or createdAt if submitted
+            Instant startAnchor = job.getStartedAt() != null ? job.getStartedAt() : job.getCreatedAt();
+            if (startAnchor == null) {
+                startAnchor = now;
+            }
+
+            Instant deadline = startAnchor.plusSeconds(budgetSeconds);
+
+            if (now.isAfter(deadline)) {
+                // Ensure atomic check-and-set: verify still in active non-terminal state
+                if (job.getStatus() == JobStatus.SUBMITTED || job.getStatus() == JobStatus.RUNNING) {
+                    log.warn("Job [{}] attempt [{}] exceeded deadline (budget={}s, elapsed={}s). Transitioning to TIMEOUT.",
+                            job.getJobId(), job.getCurrentAttemptId(), budgetSeconds,
+                            java.time.Duration.between(startAnchor, now).toSeconds());
+
+                    job.transitionTo(JobStatus.TIMEOUT);
+                    job.setSolverStatus(SolverStatus.TIMEOUT.name());
+                    job.setErrorMessage("Optimization execution exceeded allocated solver budget of " + budgetSeconds + " seconds");
+                    job.setCompletedAt(now);
+                    jobRepository.save(job);
+                    timedOutCount++;
+                }
+            }
+        }
+        return timedOutCount;
+    }
 }
+
