@@ -44,6 +44,36 @@
             <scope>runtime</scope>
         </dependency>
         <dependency>
+            <groupId>org.soa8.freight</groupId>
+            <artifactId>auth-service</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.soa8.freight</groupId>
+            <artifactId>cargo-declaration-service</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.soa8.freight</groupId>
+            <artifactId>compatibility-rule-service</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.soa8.freight</groupId>
+            <artifactId>optimization-service</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.soa8.freight</groupId>
+            <artifactId>validation-service</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>

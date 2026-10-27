@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { 
   ShieldCheck, AlertTriangle, Box, Truck, CheckCircle2, 
-  XCircle, Play, RefreshCw, Lock, FileText, Cpu, ArrowRight 
+  XCircle, Cpu 
 } from 'lucide-react';
 
 interface CargoItem {
