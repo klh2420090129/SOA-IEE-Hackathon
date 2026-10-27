@@ -115,8 +115,14 @@ public class OptimizationController {
             ));
         }
 
-        // If asynchronous dispatch is requested (or worker execution), persist durable job & outbox record and return immediately
-        if (Boolean.TRUE.equals(req.async) || "PYTHON_WORKER".equalsIgnoreCase(req.algorithm)) {
+        // If asynchronous dispatch is requested, or worker execution (PYTHON_WORKER, CP-SAT, etc.), persist durable job & outbox record and return immediately
+        boolean isWorkerAlgorithm = req.algorithm != null && (
+                "PYTHON_WORKER".equalsIgnoreCase(req.algorithm)
+                || req.algorithm.toUpperCase().contains("CPSAT")
+                || req.algorithm.toUpperCase().contains("CP_SAT")
+                || req.algorithm.toUpperCase().contains("ORTOOLS")
+        );
+        if (Boolean.TRUE.equals(req.async) || isWorkerAlgorithm) {
             OptimizationJobEntity durableJob = optimizationJobService.submitJobDurable(
                     req.declarationId,
                     req.compartment,
