@@ -421,3 +421,76 @@ def test_placement_reward_mathematically_dominates_penalty():
     assert res["evaluation"]["scalarObjective"] > 9_000_000
     assert res["evaluation"]["unitsPlaced"] == 1
 
+def test_volume_bonus_cannot_outweigh_placed_count():
+    # Setup: Compartment length 2000, width 1000, height 1000
+    # Option A: 1 huge box (length 1800, width 1000, height 1000) -> Vol = 1800 dm3
+    # Option B: 2 smaller boxes (length 1000, width 1000, height 1000 each) -> Vol = 2000 dm3
+    # Option C: Suppose huge box had vol = 1900 dm3, and two small boxes had vol = 800 dm3 each (total 1600 dm3).
+    # Can the single huge box be selected over two smaller boxes just because of higher individual volume?
+    # NO! Lexicographic Stage 1 forces count = 2 over count = 1.
+    cmd = {
+        "commandId": "cmd-vol-vs-count",
+        "jobId": "job-vol-vs-count",
+        "attemptId": "att-1",
+        "timeLimitSeconds": 10,
+        "compartment": {
+            "compartmentId": "comp-vol",
+            "lengthMm": 2000,
+            "widthMm": 1000,
+            "heightMm": 1000,
+            "maxPayloadKg": 5000.0
+        },
+        "items": [
+            # 1 large box of 1800x1000x1000 (1.8 m3) - cannot co-load with the small boxes
+            {
+                "cargoItemId": "huge-box",
+                "lengthMm": 1800,
+                "widthMm": 1000,
+                "heightMm": 1000,
+                "weightKg": 100.0,
+                "quantity": 1
+            },
+            # 2 small boxes of 1000x1000x800 (0.8 m3 each, total 1.6 m3)
+            # 1.6 m3 < 1.8 m3, but count 2 > count 1!
+            {
+                "cargoItemId": "small-box",
+                "lengthMm": 1000,
+                "widthMm": 1000,
+                "heightMm": 800,
+                "weightKg": 100.0,
+                "quantity": 2
+            }
+        ]
+    }
+    res = solve_cpsat_cargo(cmd, force_cpsat=True)
+    # The solver MUST select the 2 small boxes to maximize primary count (2 > 1)
+    # even though the single large box had higher volume than either small box!
+    assert len(res["placements"]) == 2
+    for p in res["placements"]:
+        assert p["cargoItemId"] == "small-box"
+    assert res["solverStatus"] == "OPTIMAL"
+    assert res["diagnostics"]["lexicographicStages"]["stage1CountProven"] is True
+    assert res["diagnostics"]["lexicographicStages"]["stage2VolumeProven"] is True
+
+def test_invalid_or_out_of_range_inputs_handled_safely():
+    # Invalid negative dimensions or non-positive payload
+    cmd_invalid = {
+        "commandId": "cmd-invalid",
+        "jobId": "job-invalid",
+        "attemptId": "att-1",
+        "compartment": {
+            "compartmentId": "comp-inv",
+            "lengthMm": -100,
+            "widthMm": 1000,
+            "heightMm": 1000,
+            "maxPayloadKg": 0.0
+        },
+        "items": [
+            {"cargoItemId": "box-1", "lengthMm": 1000, "widthMm": 1000, "heightMm": 1000, "weightKg": 100.0, "quantity": 1}
+        ]
+    }
+    res = solve_cpsat_cargo(cmd_invalid)
+    # Must fail closed without crashing, returning 0 placements
+    assert len(res.get("placements", [])) == 0
+    assert res.get("solverStatus") in ("UNKNOWN", "INFEASIBLE")
+

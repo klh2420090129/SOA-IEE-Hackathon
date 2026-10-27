@@ -161,9 +161,9 @@ BENCHMARK_SCENARIOS: List[Dict[str, Any]] = [
 ]
 
 def run_benchmarks():
-    print("=" * 125)
-    print(f"{'SCENARIO':<34} | {'SOLVER':<10} | {'STATUS':<9} | {'PLACED':<7} | {'TIME(ms)':<9} | {'OBJECTIVE':<12} | {'VALID':<6} | {'PROVENANCE'}")
-    print("=" * 125)
+    print("=" * 135)
+    print(f"{'SCENARIO':<32} | {'SOLVER':<10} | {'STATUS':<9} | {'PLACED':<7} | {'VOL(m3)':<8} | {'UTIL%':<6} | {'TIME(ms)':<9} | {'OBJ_SCORE':<11} | {'STAGES_PROVEN':<14} | {'VALID':<6}")
+    print("=" * 135)
 
     results = []
 
@@ -171,6 +171,7 @@ def run_benchmarks():
         name = scen["name"]
         cmd = scen["command"]
         comp = cmd["compartment"]
+        comp_vol_m3 = (comp.get("lengthMm", 0) * comp.get("widthMm", 0) * comp.get("heightMm", 0)) / 1_000_000_000.0
         rules = cmd.get("ruleSnapshot", {}).get("rules", [])
 
         # 1. Run Deterministic Heuristic
@@ -179,10 +180,11 @@ def run_benchmarks():
         t_h_ms = round((time.perf_counter() - t0) * 1000, 2)
         h_valid, h_err = validate_candidate_strictly(h_res.get("placements", []), comp, rules)
         h_eval = compute_standard_layout_evaluation(h_res.get("placements", []))
+        h_util = round((h_eval["totalVolumeM3"] / comp_vol_m3 * 100) if comp_vol_m3 > 0 else 0, 1)
         h_obj_str = str(int(h_eval["scalarObjective"]))
         
-        print(f"{name:<34} | {'HEURISTIC':<10} | {h_res.get('solverStatus', 'N/A'):<9} | "
-              f"{len(h_res.get('placements', [])):<7} | {t_h_ms:<9} | {h_obj_str:<12} | {str(h_valid):<6} | {h_res.get('provenance')}")
+        print(f"{name:<32} | {'HEURISTIC':<10} | {h_res.get('solverStatus', 'N/A'):<9} | "
+              f"{len(h_res.get('placements', [])):<7} | {h_eval['totalVolumeM3']:<8} | {str(h_util)+'%':<6} | {t_h_ms:<9} | {h_obj_str:<11} | {'HEURISTIC_N/A':<14} | {str(h_valid):<6}")
 
         # 2. Run Google OR-Tools CP-SAT Pipeline
         t0 = time.perf_counter()
@@ -190,11 +192,19 @@ def run_benchmarks():
         t_cp_ms = round((time.perf_counter() - t0) * 1000, 2)
         cp_valid, cp_err = validate_candidate_strictly(cp_res.get("placements", []), comp, rules)
         cp_eval = compute_standard_layout_evaluation(cp_res.get("placements", []))
+        cp_util = round((cp_eval["totalVolumeM3"] / comp_vol_m3 * 100) if comp_vol_m3 > 0 else 0, 1)
         cp_obj_str = str(int(cp_eval["scalarObjective"]))
 
-        print(f"{'':<34} | {'CP-SAT':<10} | {cp_res.get('solverStatus', 'N/A'):<9} | "
-              f"{len(cp_res.get('placements', [])):<7} | {t_cp_ms:<9} | {cp_obj_str:<12} | {str(cp_valid):<6} | {cp_res.get('provenance')}")
-        print("-" * 125)
+        stages_dict = cp_res.get("diagnostics", {}).get("lexicographicStages", {})
+        proven_list = []
+        if stages_dict.get("stage1CountProven"): proven_list.append("Count")
+        if stages_dict.get("stage2VolumeProven"): proven_list.append("Vol")
+        if stages_dict.get("stage3CompactnessProven"): proven_list.append("Pos")
+        proven_str = "+".join(proven_list) if proven_list else "Incumbent"
+
+        print(f"{'':<32} | {'CP-SAT':<10} | {cp_res.get('solverStatus', 'N/A'):<9} | "
+              f"{len(cp_res.get('placements', [])):<7} | {cp_eval['totalVolumeM3']:<8} | {str(cp_util)+'%':<6} | {t_cp_ms:<9} | {cp_obj_str:<11} | {proven_str:<14} | {str(cp_valid):<6}")
+        print("-" * 135)
 
         results.append({
             "scenario": name,

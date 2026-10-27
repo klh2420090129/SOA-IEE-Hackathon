@@ -371,33 +371,82 @@ def solve_cpsat_cargo(command: Dict[str, Any],
             else:
                 model.AddHint(placed_vars[i], 0)
 
-    # 6. Lexicographic Objective Formulation:
-    # Level 1: Maximize assigned cargo count & total volume (large multiplier)
-    # Level 2: Compactness / position gravity (minimize z, then x, then y)
-    # Objective = Sum(placed_i * (10,000,000 + volume_weight)) - Sum(z_i * 100 + x_i * 2 + y_i)
-    obj_terms = []
-    for i, u in enumerate(physical_units):
-        vol_score = int((u.length_mm * u.width_mm * u.height_mm) // 1000000)
-        placement_benefit = 10000000 + vol_score
-        obj_terms.append(placed_vars[i] * placement_benefit)
-        # Minimize elevation and spread
-        obj_terms.append(z_vars[i] * -100)
-        obj_terms.append(x_vars[i] * -2)
-        obj_terms.append(y_vars[i] * -1)
+    # 6. Exact Staged Lexicographic Optimization:
+    # Stage 1: Maximize safely assigned cargo count (Primary priority)
+    # Stage 2: Maximize assigned cargo volume (Secondary priority, given count)
+    # Stage 3: Minimize position spread / handling cost (Tertiary priority, given count and volume)
+    #
+    # Respecting time budget: budget is split across stages.
+    # If Stage 1 times out or finds a feasible incumbent, we use that incumbent.
+    # If Stage 1 proves optimality, we constrain count to opt_count and proceed to Stage 2.
+    # If Stage 2 proves optimality, we constrain volume to opt_vol and proceed to Stage 3.
 
-    model.Maximize(sum(obj_terms))
+    stage1_budget = max(0.5, remaining_budget * 0.5)
+    stage2_budget = max(0.5, remaining_budget * 0.3)
+    stage3_budget = max(0.5, remaining_budget * 0.2)
 
-    # Solver configuration
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = min(remaining_budget, 15.0)
     solver.parameters.random_seed = random_seed
     solver.parameters.num_workers = 1 # Deterministic execution
 
-    solver_status_code = solver.Solve(model)
+    # STAGE 1: Maximize cargo count
+    model.Maximize(sum(placed_vars))
+    solver.parameters.max_time_in_seconds = stage1_budget
+    status1 = solver.Solve(model)
+
+    stage_proven = {
+        "stage1CountProven": status1 == cp_model.OPTIMAL,
+        "stage2VolumeProven": False,
+        "stage3CompactnessProven": False
+    }
+
+    final_status_code = status1
+    opt_count = 0
+
+    if status1 in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        opt_count = int(round(solver.ObjectiveValue()))
+        
+        # If Stage 1 proved optimality or found candidates, attempt Stage 2
+        if opt_count > 0:
+            # Constrain model to optimal placed count
+            model.Add(sum(placed_vars) == opt_count)
+
+            # STAGE 2: Maximize volume of placed items
+            # Volume weight in dm^3
+            vol_scores = [int((u.length_mm * u.width_mm * u.height_mm) // 1_000_000) for u in physical_units]
+            model.Maximize(sum(placed_vars[i] * vol_scores[i] for i in range(n)))
+            
+            elapsed = time.time() - start_time
+            rem2 = max(0.1, total_time_limit_sec - elapsed)
+            solver.parameters.max_time_in_seconds = min(stage2_budget, rem2)
+            status2 = solver.Solve(model)
+
+            if status2 in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+                opt_vol = int(round(solver.ObjectiveValue()))
+                stage_proven["stage2VolumeProven"] = (status2 == cp_model.OPTIMAL)
+                final_status_code = status2
+
+                # Constrain model to optimal volume
+                model.Add(sum(placed_vars[i] * vol_scores[i] for i in range(n)) == opt_vol)
+
+                # STAGE 3: Minimize position spread / handling cost (front-floor bias)
+                # Maximize: - (100*z + 2*x + y)
+                spread_terms = [z_vars[i] * -100 + x_vars[i] * -2 + y_vars[i] * -1 for i in range(n)]
+                model.Maximize(sum(spread_terms))
+
+                elapsed = time.time() - start_time
+                rem3 = max(0.1, total_time_limit_sec - elapsed)
+                solver.parameters.max_time_in_seconds = min(stage3_budget, rem3)
+                status3 = solver.Solve(model)
+
+                if status3 in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+                    stage_proven["stage3CompactnessProven"] = (status3 == cp_model.OPTIMAL)
+                    final_status_code = status3
+
     solve_duration_ms = int((time.time() - start_time) * 1000)
 
     # Status mapping
-    if solver_status_code in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+    if final_status_code in (cp_model.OPTIMAL, cp_model.FEASIBLE) and opt_count > 0:
         cp_placements: List[Dict[str, Any]] = []
         cp_unassigned: List[Dict[str, Any]] = []
 
@@ -440,10 +489,10 @@ def solve_cpsat_cargo(command: Dict[str, Any],
         if is_valid:
             # Check if CP-SAT solution is at least as good as heuristic incumbent
             if len(cp_placements) >= len(h_placements):
-                # When CP-SAT proves optimality for the bounded model, report OPTIMAL.
-                # A partial placement where the remaining units could not fit is mathematically optimal
-                # for the encoded packing model. If solver did not prove optimality (e.g. FEASIBLE incumbent), report FEASIBLE.
-                if solver_status_code == cp_model.OPTIMAL and len(cp_placements) > 0:
+                # When CP-SAT proves optimality for Stage 1 (placed count), report OPTIMAL.
+                # A partial placement where remaining units cannot fit is mathematically optimal
+                # for the encoded model. If Stage 1 did not prove optimality, report FEASIBLE.
+                if stage_proven["stage1CountProven"] and len(cp_placements) > 0:
                     solver_status_name = "OPTIMAL"
                 elif cp_placements:
                     solver_status_name = "FEASIBLE"
@@ -470,14 +519,16 @@ def solve_cpsat_cargo(command: Dict[str, Any],
                         "engine": PROVENANCE_CP_SAT,
                         "version": ALGORITHM_VERSION,
                         "ortoolsVersion": "9.10.4067",
-                        "cpSatStatus": solver.StatusName(solver_status_code),
-                        "modelOptimalityProven": solver_status_code == cp_model.OPTIMAL,
+                        "cpSatStatus": solver.StatusName(final_status_code),
+                        "modelOptimalityProven": stage_proven["stage1CountProven"],
+                        "lexicographicStages": stage_proven,
+                        "compartmentScope": "SINGLE_COMPARTMENT_ENCODED",
                         "unitsTotal": n,
                         "unitsPlaced": len(cp_placements),
                         "unitsUnassigned": len(cp_unassigned),
                         "branches": solver.NumBranches(),
                         "wallTimeSeconds": solver.WallTime(),
-                        "objectiveValue": solver.ObjectiveValue() if solver_status_code in (cp_model.OPTIMAL, cp_model.FEASIBLE) else None,
+                        "objectiveValue": layout_eval["scalarObjective"],
                         "scalarEvaluationScore": layout_eval["scalarObjective"],
                         "validatedIndependently": True
                     }
