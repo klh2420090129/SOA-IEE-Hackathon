@@ -41,9 +41,11 @@ public class ValidationController {
         }
 
         ValidationResultDto result = validator.validate(req.layout, req.compartment, req.ruleSnapshot);
-        String candidateDigest = req.layout.getContentDigest() != null ? req.layout.getContentDigest() : "";
+        String candidateDigest = org.soa8.freight.common.util.CandidateDigestUtils.computeCanonicalDigest(req.layout.getPlacements());
         String snapshotId = req.ruleSnapshot != null ? req.ruleSnapshot.getSnapshotId() : "none";
-        String snapshotDigest = req.ruleSnapshot != null ? req.ruleSnapshot.getSnapshotDigest() : "";
+        String snapshotDigest = (req.ruleSnapshot != null && req.ruleSnapshot.getSnapshotDigest() != null)
+                ? req.ruleSnapshot.getSnapshotDigest()
+                : (req.ruleSnapshot != null ? org.soa8.freight.common.util.RuleSnapshotDigestUtils.computeCanonicalDigest(req.ruleSnapshot) : "");
 
         result.setCandidateLayoutId(req.layout.getLayoutId());
         result.setCandidateLayoutVersion(req.layout.getLayoutVersion());

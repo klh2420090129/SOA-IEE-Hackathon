@@ -1,5 +1,5 @@
 import pytest
-from heuristic_solver import solve_3d_packing, ORIENTATION_DEFAULT, ORIENTATION_ROTATE_YAW_90
+from heuristic_solver import solve_3d_packing, compute_content_digest, ORIENTATION_DEFAULT, ORIENTATION_ROTATE_YAW_90
 
 def test_deterministic_output_for_identical_input():
     cmd = {
@@ -226,3 +226,48 @@ def test_hazard_forbidden_co_loading_rejects_second_item():
     assert len(res["placements"]) == 1
     assert len(res["unassignedItems"]) == 1
     assert res["unassignedItems"][0]["reasonCode"] == "HAZARD_COLOAD_FORBIDDEN"
+
+def test_cross_language_candidate_digest_parity():
+    # Test 1: Empty placements
+    assert compute_content_digest([]) == "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+
+    # Test 2: Single placement matching Java CandidateDigestUtilsTest
+    p1 = {
+        "placementId": "pl-1",
+        "cargoItemId": "item-1",
+        "instanceIndex": 0,
+        "hazardClass": "3",
+        "unNumber": "UN1993",
+        "xMm": 0,
+        "yMm": 0,
+        "zMm": 0,
+        "lengthMm": 1200,
+        "widthMm": 800,
+        "heightMm": 1000,
+        "weightKg": 500.0,
+        "orientation": "DEFAULT",
+        "stackable": True,
+        "maxStackWeightKg": 1500.0
+    }
+    assert compute_content_digest([p1]) == "e45ded0b55dd2051095602375f842716d8dabe20955bb9d26e3429a45d44690f"
+
+    # Test 3: Multiple placements matching Java CandidateDigestUtilsTest
+    p2 = {
+        "placementId": "pl-2",
+        "cargoItemId": "item-2",
+        "instanceIndex": 1,
+        "hazardClass": "8",
+        "unNumber": "UN1789",
+        "xMm": 1500,
+        "yMm": 500,
+        "zMm": 0,
+        "lengthMm": 1000,
+        "widthMm": 1000,
+        "heightMm": 800,
+        "weightKg": 350.25,
+        "orientation": "ROTATE_YAW_90",
+        "stackable": False,
+        "maxStackWeightKg": None
+    }
+    assert compute_content_digest([p1, p2]) == "c37d14aad45e2ad525a7761a4f5b2dc4c25ded8ba3c612bf51cd1ba68e69cb4d"
+

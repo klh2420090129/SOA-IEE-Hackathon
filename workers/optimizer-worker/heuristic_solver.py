@@ -163,7 +163,28 @@ def add_point_if_valid(p: Tuple[int, int, int], points: Set[Tuple[int, int, int]
     points.add((x, y, z))
 
 def compute_content_digest(placements: List[Dict[str, Any]]) -> str:
-    serialized = json.dumps(placements, separators=(',', ':'), sort_keys=True)
+    if not placements:
+        return hashlib.sha256(b"[]").hexdigest()
+    canonical_list = []
+    for p in placements:
+        canonical_list.append({
+            "cargoItemId": str(p.get("cargoItemId") or ""),
+            "hazardClass": str(p.get("hazardClass") or ""),
+            "heightMm": int(p.get("heightMm", 0)),
+            "instanceIndex": int(p.get("instanceIndex", 0)),
+            "lengthMm": int(p.get("lengthMm", 0)),
+            "maxStackWeightKg": float(p.get("maxStackWeightKg")) if p.get("maxStackWeightKg") is not None else None,
+            "orientation": str(p.get("orientation") or "DEFAULT"),
+            "placementId": str(p.get("placementId") or ""),
+            "stackable": bool(p.get("stackable")) if p.get("stackable") is not None else False,
+            "unNumber": str(p.get("unNumber") or ""),
+            "weightKg": float(p.get("weightKg", 0.0)),
+            "widthMm": int(p.get("widthMm", 0)),
+            "xMm": int(p.get("xMm", 0)),
+            "yMm": int(p.get("yMm", 0)),
+            "zMm": int(p.get("zMm", 0))
+        })
+    serialized = json.dumps(canonical_list, separators=(',', ':'), sort_keys=True)
     return hashlib.sha256(serialized.encode('utf-8')).hexdigest()
 
 def solve_3d_packing(command: Dict[str, Any]) -> Dict[str, Any]:

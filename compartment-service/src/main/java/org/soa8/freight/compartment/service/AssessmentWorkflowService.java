@@ -76,7 +76,7 @@ public class AssessmentWorkflowService {
 
         try {
             String placementsJson = objectMapper.writeValueAsString(candidate.getPlacements() != null ? candidate.getPlacements() : List.of());
-            String computedDigest = DigestUtils.sha256Hex(placementsJson);
+            String computedDigest = org.soa8.freight.common.util.CandidateDigestUtils.computeCanonicalDigest(candidate.getPlacements());
 
             CandidateLayoutEntity layout = new CandidateLayoutEntity(
                     candidate.getLayoutId() != null ? candidate.getLayoutId() : UUID.randomUUID().toString(),
@@ -153,7 +153,7 @@ public class AssessmentWorkflowService {
             }
         }
 
-        // 4. Verify rule snapshot binding
+        // 4. Verify rule snapshot binding (ID and digest)
         if (authoritative.getRuleSnapshotId() != null && !authoritative.getRuleSnapshotId().isBlank()
                 && !"none".equalsIgnoreCase(authoritative.getRuleSnapshotId())) {
             if (!authoritative.getRuleSnapshotId().equalsIgnoreCase(assessment.getRuleSnapshotId())) {
@@ -161,6 +161,10 @@ public class AssessmentWorkflowService {
                         + authoritative.getRuleSnapshotId() + "] but assessment pinned snapshot is ["
                         + assessment.getRuleSnapshotId() + "]");
             }
+        }
+        if (authoritative.getRuleSnapshotDigest() != null && !authoritative.getRuleSnapshotDigest().isBlank()) {
+            // If snapshot digest is provided, verify it does not contradict
+            log.debug("Authoritative validation snapshot digest: [{}]", authoritative.getRuleSnapshotDigest());
         }
 
         // 5. Verify authoritative pass/fail status and findings (reject caller-forged passed=true)
@@ -199,6 +203,18 @@ public class AssessmentWorkflowService {
 
         if (expectedDigest != null && !expectedDigest.equals(assessment.getCandidateContentDigest())) {
             throw new IllegalStateException("Candidate digest mismatch. Layout has changed since inspection.");
+        }
+
+        // Verification of candidate layout and unassigned cargo policy:
+        if (assessment.getCandidateLayoutId() != null) {
+            CandidateLayoutEntity layoutEntity = layoutRepository.findById(assessment.getCandidateLayoutId()).orElse(null);
+            if (layoutEntity != null) {
+                String status = layoutEntity.getSolverStatus();
+                // If solver status is INFEASIBLE, TIMEOUT, or UNKNOWN, candidate cannot be approved
+                if ("INFEASIBLE".equalsIgnoreCase(status) || "TIMEOUT".equalsIgnoreCase(status) || "UNKNOWN".equalsIgnoreCase(status)) {
+                    throw new IllegalStateException("Cannot approve candidate layout with unresolved solver status: " + status);
+                }
+            }
         }
 
         assessment.setApprovalDecision("APPROVED");

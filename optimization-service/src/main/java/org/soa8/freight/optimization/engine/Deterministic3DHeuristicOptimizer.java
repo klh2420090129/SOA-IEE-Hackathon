@@ -305,7 +305,7 @@ public class Deterministic3DHeuristicOptimizer {
         }
 
         String layoutId = UUID.randomUUID().toString();
-        String contentDigest = DigestUtils.computeObjectDigest(placedItems);
+        String contentDigest = org.soa8.freight.common.util.CandidateDigestUtils.computeCanonicalDigest(placedItems);
 
         String canonicalRuleSnapshotDigest = (ruleSnapshot != null)
                 ? RuleSnapshotDigestUtils.computeCanonicalDigest(ruleSnapshot)

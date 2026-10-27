@@ -75,13 +75,19 @@ public class ItemPlacementDto {
     public String getUnNumber() { return unNumber; }
     public void setUnNumber(String unNumber) { this.unNumber = unNumber; }
 
+    @JsonProperty("xMm")
     public int getXMm() { return xMm; }
+    @JsonProperty("xMm")
     public void setXMm(int xMm) { this.xMm = xMm; }
 
+    @JsonProperty("yMm")
     public int getYMm() { return yMm; }
+    @JsonProperty("yMm")
     public void setYMm(int yMm) { this.yMm = yMm; }
 
+    @JsonProperty("zMm")
     public int getZMm() { return zMm; }
+    @JsonProperty("zMm")
     public void setZMm(int zMm) { this.zMm = zMm; }
 
     public int getLengthMm() { return lengthMm; }
