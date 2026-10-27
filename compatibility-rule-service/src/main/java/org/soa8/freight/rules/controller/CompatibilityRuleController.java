@@ -35,7 +35,7 @@ public class CompatibilityRuleController {
     }
 
     @GetMapping("/rule-snapshots/{id}")
-    public ResponseEntity<?> getSnapshot(@PathVariable String id) {
+    public ResponseEntity<?> getSnapshot(@PathVariable("id") String id) {
         return snapshotRepository.findById(id)
                 .map(this::toDto)
                 .<ResponseEntity<?>>map(ResponseEntity::ok)

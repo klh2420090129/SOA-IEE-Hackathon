@@ -62,7 +62,7 @@ public class ValidationController {
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<?> getValidationRun(@PathVariable String id) {
+    public ResponseEntity<?> getValidationRun(@PathVariable("id") String id) {
         return runRepository.findById(id)
                 .<ResponseEntity<?>>map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.notFound().build());

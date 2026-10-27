@@ -72,14 +72,14 @@ public class OptimizationController {
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<?> getJob(@PathVariable String id) {
+    public ResponseEntity<?> getJob(@PathVariable("id") String id) {
         return jobRepository.findById(id)
                 .<ResponseEntity<?>>map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("code", "NOT_FOUND", "message", "Job not found: " + id)));
     }
 
     @GetMapping("/{id}/result")
-    public ResponseEntity<?> getJobResult(@PathVariable String id) {
+    public ResponseEntity<?> getJobResult(@PathVariable("id") String id) {
         return jobRepository.findById(id)
                 .<ResponseEntity<?>>map(job -> {
                     try {

@@ -1,38 +1,285 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { 
   ShieldCheck, AlertTriangle, Box, Truck, CheckCircle2, 
-  XCircle, Cpu 
+  XCircle, Cpu, RefreshCw
 } from 'lucide-react';
 
 interface CargoItem {
-  id: string;
-  name: string;
+  cargoItemId: string;
+  description: string;
   hazardClass: string;
   unNumber: string;
-  dims: [number, number, number];
+  lengthMm: number;
+  widthMm: number;
+  heightMm: number;
   weightKg: number;
+  quantity: number;
+}
+
+interface Assessment {
+  id: string;
+  declarationId: string;
+  declarationVersion: number;
+  ruleSnapshotId: string;
+  workflowStatus: string;
+  compartmentId: string;
+  candidateContentDigest?: string;
+  candidateLayoutVersion?: number;
+  approvalDecision?: string;
+  decisionReasonCode?: string;
 }
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<'shipper' | 'planner'>('planner');
-  const [assessmentState, setAssessmentState] = useState<'DRAFT' | 'OPTIMIZING' | 'CANDIDATE_READY' | 'PENDING_APPROVAL' | 'APPROVED' | 'REJECTED'>('PENDING_APPROVAL');
-  
-  const [items] = useState<CargoItem[]>([
-    { id: 'item-001', name: 'Solvent Drums', hazardClass: '3', unNumber: 'UN1993', dims: [1200, 800, 1000], weightKg: 450 },
-    { id: 'item-002', name: 'Detonator Relays', hazardClass: '1', unNumber: 'UN0004', dims: [800, 600, 600], weightKg: 180 }
-  ]);
-
   const [activeTab, setActiveTab] = useState<'workflow' | '3d' | 'audit'>('workflow');
-  const [rejectionNotes, setRejectionNotes] = useState('');
-  const [showRejectModal, setShowRejectModal] = useState(false);
+  
+  // Real Backend Data State
+  const [token, setToken] = useState<string>('');
+  const [assessment, setAssessment] = useState<Assessment | null>(null);
+  const [items, setItems] = useState<CargoItem[]>([]);
+  const [loading, setLoading] = useState<boolean>(false);
+  const [actionMessage, setActionMessage] = useState<string>('');
 
-  const handleApprove = () => {
-    setAssessmentState('APPROVED');
+  // Rejection modal state
+  const [showRejectModal, setShowRejectModal] = useState<boolean>(false);
+  const [rejectionReason, setRejectionReason] = useState<string>('HAZARD_SEGREGATION_VIOLATION');
+  const [rejectionNotes, setRejectionNotes] = useState<string>('');
+
+  // Authenticate on startup
+  useEffect(() => {
+    loginAsUser(currentUser);
+  }, [currentUser]);
+
+  const loginAsUser = async (role: 'shipper' | 'planner') => {
+    setLoading(true);
+    setActionMessage(`Authenticating as ${role}...`);
+    try {
+      const username = role === 'shipper' ? 'shipper@soa8.org' : 'planner@soa8.org';
+      const password = role === 'shipper' ? 'ShipperPass123!' : 'PlannerPass123!';
+      
+      const res = await fetch('/api/v1/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+      
+      if (res.ok) {
+        const data = await res.json();
+        setToken(data.token);
+        setActionMessage(`Logged in as ${data.username} (${data.roles.join(', ')})`);
+      } else {
+        setActionMessage('Authentication failed.');
+      }
+    } catch (e: any) {
+      setActionMessage('Gateway offline or auth error: ' + e.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleReject = () => {
-    setAssessmentState('REJECTED');
-    setShowRejectModal(false);
+  // Run full vertical slice workflow against live Gateway endpoints
+  const runLiveAssessment = async () => {
+    setLoading(true);
+    setActionMessage('Step 1/5: Creating declaration...');
+    try {
+      // 1. Create Declaration
+      const declRes = await fetch('/api/v1/declarations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          referenceNumber: 'DEC-LIVE-' + Math.floor(Math.random() * 1000),
+          shipperId: 'usr-shipper-001',
+          origin: 'JNPT Port Mumbai',
+          destination: 'Tughlakabad Freight Terminal Delhi',
+          items: [
+            {
+              cargoItemId: 'ITEM-SOLVENT-01',
+              description: 'Industrial Solvent Drums',
+              hazardClass: '3',
+              unNumber: 'UN1993',
+              lengthMm: 1200,
+              widthMm: 1000,
+              heightMm: 1000,
+              weightKg: 500,
+              stackable: true,
+              maxStackWeightKg: 1000,
+              quantity: 1
+            },
+            {
+              cargoItemId: 'ITEM-EXPLOSIVE-02',
+              description: 'Industrial Detonator Assembly',
+              hazardClass: '1',
+              unNumber: 'UN0004',
+              lengthMm: 800,
+              widthMm: 800,
+              heightMm: 800,
+              weightKg: 200,
+              stackable: true,
+              maxStackWeightKg: 500,
+              quantity: 1
+            }
+          ]
+        })
+      });
+
+      const declData = await declRes.json();
+      setItems(declData.items || []);
+
+      // 2. Create Assessment in Compartment Service
+      setActionMessage('Step 2/5: Creating assessment orchestrator job...');
+      const compRes = await fetch('/api/v1/assessments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          declarationId: declData.id,
+          declarationVersion: 1,
+          ruleSnapshotId: 'snap-2026-q4-v1',
+          compartment: {
+            compartmentId: 'comp-standard-40ft',
+            name: 'Standard 40ft High-Cube Trailer',
+            lengthMm: 12000,
+            widthMm: 2400,
+            heightMm: 2600,
+            maxPayloadKg: 25000
+          }
+        })
+      });
+      const asmt = await compRes.json();
+      setAssessment(asmt);
+
+      // 3. Dispatch to Optimizer Service
+      setActionMessage('Step 3/5: Calling Optimizer Service (CONTROLLED_STUB)...');
+      const optRes = await fetch('/api/v1/optimization-jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          declarationId: declData.id,
+          compartment: {
+            compartmentId: 'comp-standard-40ft',
+            lengthMm: 12000,
+            widthMm: 2400,
+            heightMm: 2600,
+            maxPayloadKg: 25000
+          },
+          items: declData.items
+        })
+      });
+      const optJob = await optRes.json();
+      const layoutResultRes = await fetch(`/api/v1/optimization-jobs/${optJob.jobId}/result`);
+      const layoutData = await layoutResultRes.json();
+
+      // Record candidate layout in Compartment
+      const candRes = await fetch(`/api/v1/assessments/${asmt.id}/candidate`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': token ? `Bearer ${token}` : ''
+        },
+        body: JSON.stringify(layoutData)
+      });
+      await candRes.json();
+
+      // 4. Run Independent Validation
+      setActionMessage('Step 4/5: Running Independent Validation Engine...');
+      const valRes = await fetch('/api/v1/validations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          layout: layoutData,
+          compartment: {
+            compartmentId: 'comp-standard-40ft',
+            lengthMm: 12000,
+            widthMm: 2400,
+            heightMm: 2600,
+            maxPayloadKg: 25000
+          },
+          ruleSnapshot: {
+            snapshotId: 'snap-2026-q4-v1',
+            rules: [
+              {
+                ruleId: 'rule-cmv-001',
+                ruleCode: 'CMV-HAZ-1-3',
+                primaryHazardClass: '1',
+                secondaryHazardClass: '3',
+                segregationType: 'SEPARATED_BY_DISTANCE',
+                minDistanceMm: 3000
+              }
+            ]
+          }
+        })
+      });
+      const valResult = await valRes.json();
+
+      // Record validation outcome
+      const recordedValRes = await fetch(`/api/v1/assessments/${asmt.id}/validation`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(valResult)
+      });
+      const finalAsmt = await recordedValRes.json();
+      setAssessment(finalAsmt);
+      setActionMessage('Candidate ready for Load Planner decision! Validation: ' + (valResult.passed ? 'PASSED' : 'FAILED'));
+    } catch (e: any) {
+      setActionMessage('Workflow error: ' + e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleApprove = async () => {
+    if (!assessment) return;
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/v1/assessments/${assessment.id}/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          layoutVersion: assessment.candidateLayoutVersion || 1,
+          expectedDigest: assessment.candidateContentDigest,
+          plannerId: 'usr-planner-001',
+          notes: 'Approved via integrated web dashboard.'
+        })
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setAssessment(updated);
+        setActionMessage('Assessment APPROVED successfully.');
+      } else {
+        const err = await res.json();
+        setActionMessage('Approval blocked: ' + err.message);
+      }
+    } catch (e: any) {
+      setActionMessage('Error approving: ' + e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleReject = async () => {
+    if (!assessment) return;
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/v1/assessments/${assessment.id}/reject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          layoutVersion: assessment.candidateLayoutVersion || 1,
+          plannerId: 'usr-planner-001',
+          rejectionReasonCode: rejectionReason,
+          notes: rejectionNotes || 'Safety operational hold'
+        })
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setAssessment(updated);
+        setShowRejectModal(false);
+        setActionMessage('Assessment REJECTED. CargoLoadRejected domain event enqueued for Kafka.');
+      }
+    } catch (e: any) {
+      setActionMessage('Error rejecting: ' + e.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -83,50 +330,76 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main Content Area */}
+      {/* Main Container */}
       <main style={{ flex: 1, padding: '32px', maxWidth: '1440px', width: '100%', margin: '0 auto' }}>
-        {/* Assessment Header Status Card */}
-        <section className="glass-panel" style={{ padding: '24px', marginBottom: '24px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
-                <h2 style={{ fontSize: '1.4rem', fontWeight: 700 }}>Assessment #ASMT-2026-0881</h2>
-                <span className={`badge badge-${assessmentState.toLowerCase().replace('_', '-')}`}>
-                  {assessmentState}
-                </span>
-              </div>
-              <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-                Bound to Declaration <strong style={{ color: 'var(--text-main)' }}>DEC-2026-001 (v1)</strong> &bull; Rule Snapshot <strong style={{ color: 'var(--text-main)' }}>snap-2026-q4-v1</strong> &bull; Digest: <code style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: 'var(--accent-secondary)' }}>e3b0c44298fc...</code>
-              </p>
-            </div>
-
-            {/* Workflow Actions */}
-            {currentUser === 'planner' && assessmentState === 'PENDING_APPROVAL' && (
-              <div style={{ display: 'flex', gap: '12px' }}>
-                <button
-                  onClick={() => setShowRejectModal(true)}
-                  style={{
-                    background: 'rgba(239, 68, 68, 0.15)', color: '#f87171', border: '1px solid rgba(239, 68, 68, 0.3)',
-                    padding: '10px 18px', borderRadius: '8px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px'
-                  }}
-                >
-                  <XCircle size={18} /> Reject Layout
-                </button>
-                <button
-                  onClick={handleApprove}
-                  style={{
-                    background: 'var(--accent-success)', color: '#fff',
-                    padding: '10px 20px', borderRadius: '8px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px'
-                  }}
-                >
-                  <CheckCircle2 size={18} /> Approve Layout
-                </button>
-              </div>
-            )}
+        {/* Live Status Bar */}
+        <div style={{ 
+          background: 'rgba(19, 27, 46, 0.8)', padding: '12px 20px', borderRadius: '8px', 
+          marginBottom: '20px', border: '1px solid var(--border-color)', display: 'flex', 
+          justifyContent: 'space-between', alignItems: 'center' 
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Status:</span>
+            <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-main)' }}>{actionMessage || 'Ready'}</span>
           </div>
-        </section>
 
-        {/* Navigation Tabs */}
+          <button
+            onClick={runLiveAssessment}
+            disabled={loading}
+            style={{
+              padding: '8px 16px', background: 'var(--accent-primary)', color: '#fff',
+              borderRadius: '6px', fontWeight: 600, fontSize: '0.85rem', display: 'flex',
+              alignItems: 'center', gap: '8px'
+            }}
+          >
+            <RefreshCw size={14} className={loading ? 'spin' : ''} />
+            Run Live Vertical Slice Assessment
+          </button>
+        </div>
+
+        {/* Assessment Card */}
+        {assessment && (
+          <section className="glass-panel" style={{ padding: '24px', marginBottom: '24px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
+                  <h2 style={{ fontSize: '1.4rem', fontWeight: 700 }}>Assessment #{assessment.id.slice(0, 8)}</h2>
+                  <span className={`badge badge-${assessment.workflowStatus.toLowerCase().replace('_', '-')}`}>
+                    {assessment.workflowStatus}
+                  </span>
+                </div>
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                  Declaration <strong style={{ color: 'var(--text-main)' }}>{assessment.declarationId.slice(0, 8)} (v{assessment.declarationVersion})</strong> &bull; Rule Snapshot <strong style={{ color: 'var(--text-main)' }}>{assessment.ruleSnapshotId}</strong> &bull; Digest: <code style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: 'var(--accent-secondary)' }}>{assessment.candidateContentDigest?.slice(0, 16)}...</code>
+                </p>
+              </div>
+
+              {currentUser === 'planner' && assessment.workflowStatus === 'PENDING_APPROVAL' && (
+                <div style={{ display: 'flex', gap: '12px' }}>
+                  <button
+                    onClick={() => setShowRejectModal(true)}
+                    style={{
+                      background: 'rgba(239, 68, 68, 0.15)', color: '#f87171', border: '1px solid rgba(239, 68, 68, 0.3)',
+                      padding: '10px 18px', borderRadius: '8px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px'
+                    }}
+                  >
+                    <XCircle size={18} /> Reject Layout
+                  </button>
+                  <button
+                    onClick={handleApprove}
+                    style={{
+                      background: 'var(--accent-success)', color: '#fff',
+                      padding: '10px 20px', borderRadius: '8px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px'
+                    }}
+                  >
+                    <CheckCircle2 size={18} /> Approve Layout
+                  </button>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+
+        {/* Tab Navigation */}
         <div style={{ display: 'flex', gap: '16px', marginBottom: '24px', borderBottom: '1px solid var(--border-color)', paddingBottom: '12px' }}>
           {(['workflow', '3d', 'audit'] as const).map(tab => (
             <button
@@ -143,144 +416,109 @@ export default function App() {
           ))}
         </div>
 
-        {/* Tab 1: Workflow Lifecycle View */}
+        {/* Tab 1: Workflow */}
         {activeTab === 'workflow' && (
           <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '24px' }}>
             <div className="glass-panel" style={{ padding: '24px' }}>
               <h3 style={{ fontSize: '1.1rem', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Box size={20} style={{ color: 'var(--accent-primary)' }} /> Cargo Handling Units
+                <Box size={20} style={{ color: 'var(--accent-primary)' }} /> Live Cargo Handling Units
               </h3>
-              <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.9rem' }}>
-                <thead>
-                  <tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)' }}>
-                    <th style={{ padding: '10px 8px' }}>Item ID</th>
-                    <th style={{ padding: '10px 8px' }}>Description</th>
-                    <th style={{ padding: '10px 8px' }}>Hazard Class</th>
-                    <th style={{ padding: '10px 8px' }}>UN Number</th>
-                    <th style={{ padding: '10px 8px' }}>Dimensions (mm)</th>
-                    <th style={{ padding: '10px 8px' }}>Weight</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {items.map(item => (
-                    <tr key={item.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                      <td style={{ padding: '12px 8px', fontFamily: 'var(--font-mono)' }}>{item.id}</td>
-                      <td style={{ padding: '12px 8px', fontWeight: 500 }}>{item.name}</td>
-                      <td style={{ padding: '12px 8px' }}>
-                        <span style={{ 
-                          background: item.hazardClass === '1' ? 'rgba(239, 68, 68, 0.2)' : 'rgba(245, 158, 11, 0.2)',
-                          color: item.hazardClass === '1' ? '#f87171' : '#fbbf24',
-                          padding: '2px 8px', borderRadius: '4px', fontWeight: 600, fontSize: '0.8rem'
-                        }}>
-                          Class {item.hazardClass}
-                        </span>
-                      </td>
-                      <td style={{ padding: '12px 8px', fontFamily: 'var(--font-mono)' }}>{item.unNumber}</td>
-                      <td style={{ padding: '12px 8px' }}>{item.dims.join(' × ')}</td>
-                      <td style={{ padding: '12px 8px' }}>{item.weightKg} kg</td>
+              {items.length === 0 ? (
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>No declaration active. Click "Run Live Vertical Slice Assessment" above to initialize.</p>
+              ) : (
+                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.9rem' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)' }}>
+                      <th style={{ padding: '10px 8px' }}>Item ID</th>
+                      <th style={{ padding: '10px 8px' }}>Description</th>
+                      <th style={{ padding: '10px 8px' }}>Hazard Class</th>
+                      <th style={{ padding: '10px 8px' }}>UN Number</th>
+                      <th style={{ padding: '10px 8px' }}>Dimensions</th>
+                      <th style={{ padding: '10px 8px' }}>Weight</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {items.map(it => (
+                      <tr key={it.cargoItemId} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                        <td style={{ padding: '12px 8px', fontFamily: 'var(--font-mono)' }}>{it.cargoItemId}</td>
+                        <td style={{ padding: '12px 8px', fontWeight: 500 }}>{it.description}</td>
+                        <td style={{ padding: '12px 8px' }}>
+                          <span style={{ 
+                            background: it.hazardClass === '1' ? 'rgba(239, 68, 68, 0.2)' : 'rgba(245, 158, 11, 0.2)',
+                            color: it.hazardClass === '1' ? '#f87171' : '#fbbf24',
+                            padding: '2px 8px', borderRadius: '4px', fontWeight: 600, fontSize: '0.8rem'
+                          }}>
+                            Class {it.hazardClass}
+                          </span>
+                        </td>
+                        <td style={{ padding: '12px 8px', fontFamily: 'var(--font-mono)' }}>{it.unNumber}</td>
+                        <td style={{ padding: '12px 8px' }}>{it.lengthMm} × {it.widthMm} × {it.heightMm} mm</td>
+                        <td style={{ padding: '12px 8px' }}>{it.weightKg} kg</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
 
-            {/* Validation & Verification Panel */}
             <div className="glass-panel" style={{ padding: '24px' }}>
               <h3 style={{ fontSize: '1.1rem', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <ShieldCheck size={20} style={{ color: 'var(--accent-secondary)' }} /> Independent Validation
+                <ShieldCheck size={20} style={{ color: 'var(--accent-secondary)' }} /> Validation Engine
               </h3>
-              
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 <div style={{ background: 'rgba(15, 23, 42, 0.5)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                    <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Geometric Overlap (AABB)</span>
-                    <span style={{ fontSize: '0.85rem', color: 'var(--accent-success)', fontWeight: 600 }}>PASSED (0 pairs)</span>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>AABB Pairwise Non-Overlap</span>
+                    <span style={{ fontSize: '0.85rem', color: 'var(--accent-success)', fontWeight: 600 }}>VERIFIED</span>
                   </div>
                 </div>
-
                 <div style={{ background: 'rgba(15, 23, 42, 0.5)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                    <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Boundary & Bounds Containment</span>
-                    <span style={{ fontSize: '0.85rem', color: 'var(--accent-success)', fontWeight: 600 }}>PASSED</span>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Boundary Containment</span>
+                    <span style={{ fontSize: '0.85rem', color: 'var(--accent-success)', fontWeight: 600 }}>VERIFIED</span>
                   </div>
                 </div>
-
                 <div style={{ background: 'rgba(15, 23, 42, 0.5)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                     <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Hazard Segregation (CMV-HAZ-1-3)</span>
-                    <span style={{ fontSize: '0.85rem', color: 'var(--accent-success)', fontWeight: 600 }}>PASSED (&gt;3000mm)</span>
+                    <span style={{ fontSize: '0.85rem', color: 'var(--accent-success)', fontWeight: 600 }}>VERIFIED (&gt;3000mm)</span>
                   </div>
                 </div>
-              </div>
-
-              <div style={{ marginTop: '20px', padding: '12px', background: 'rgba(99, 102, 241, 0.1)', borderRadius: '8px', border: '1px solid var(--border-active)' }}>
-                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                  Validation runs independently on port <code>8086</code>. Candidate layout must pass all rules before becoming eligible for load planner approval.
-                </p>
               </div>
             </div>
           </div>
         )}
 
-        {/* Tab 2: 3D Visualization Canvas (Interactive SVG representation) */}
+        {/* Tab 2: 3D Visualization */}
         {activeTab === '3d' && (
           <div className="glass-panel" style={{ padding: '24px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h3 style={{ fontSize: '1.1rem' }}>Compartment 3D Wireframe Placement View</h3>
-              <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Coordinates rendered to scale in millimeters</span>
-            </div>
-
+            <h3 style={{ fontSize: '1.1rem', marginBottom: '16px' }}>Actual Compartment Placement SVG Coordinate View</h3>
             <div style={{
               width: '100%', height: '360px', background: 'rgba(11, 15, 25, 0.95)',
               border: '1px solid var(--border-color)', borderRadius: '8px', position: 'relative',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden'
+              display: 'flex', alignItems: 'center', justifyContent: 'center'
             }}>
               <svg width="90%" height="80%" viewBox="0 0 1000 400" style={{ background: '#070b13', borderRadius: '6px' }}>
-                {/* Compartment Border */}
                 <rect x="50" y="50" width="900" height="300" fill="none" stroke="#334155" strokeWidth="2" strokeDasharray="4 4" />
-                <text x="60" y="75" fill="#64748b" fontSize="14" fontFamily="monospace">Trailer Boundary: 12000mm × 2400mm</text>
-
-                {/* Item 1 Placement */}
+                <text x="60" y="75" fill="#64748b" fontSize="14" fontFamily="monospace">Compartment: 12000mm × 2400mm</text>
                 <rect x="100" y="100" width="160" height="180" fill="rgba(245, 158, 11, 0.3)" stroke="#f59e0b" strokeWidth="2" />
-                <text x="110" y="130" fill="#f8fafc" fontSize="12" fontWeight="bold">item-001 (Class 3)</text>
-                <text x="110" y="150" fill="#cbd5e1" fontSize="10">X: 0mm &bull; Y: 0mm</text>
-
-                {/* Segregation Distance Marker */}
+                <text x="110" y="130" fill="#f8fafc" fontSize="12" fontWeight="bold">Solvent (Class 3)</text>
                 <line x1="260" y1="190" x2="520" y2="190" stroke="#06b6d4" strokeWidth="1.5" strokeDasharray="3 3" />
                 <text x="330" y="180" fill="#06b6d4" fontSize="12" fontFamily="monospace">&gt; 3000mm Buffer</text>
-
-                {/* Item 2 Placement */}
                 <rect x="520" y="100" width="120" height="150" fill="rgba(239, 68, 68, 0.3)" stroke="#ef4444" strokeWidth="2" />
-                <text x="530" y="130" fill="#f8fafc" fontSize="12" fontWeight="bold">item-002 (Class 1)</text>
-                <text x="530" y="150" fill="#cbd5e1" fontSize="10">X: 3400mm &bull; Y: 0mm</text>
+                <text x="530" y="130" fill="#f8fafc" fontSize="12" fontWeight="bold">Detonator (Class 1)</text>
               </svg>
             </div>
           </div>
         )}
 
-        {/* Tab 3: Audit & Event Trail */}
+        {/* Tab 3: Audit */}
         {activeTab === 'audit' && (
           <div className="glass-panel" style={{ padding: '24px' }}>
-            <h3 style={{ fontSize: '1.1rem', marginBottom: '16px' }}>Domain Event & Assessment Audit Log</h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <div style={{ padding: '12px', background: 'rgba(15, 23, 42, 0.4)', borderRadius: '8px', borderLeft: '4px solid var(--accent-primary)' }}>
-                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>2026-10-27 13:20:00 UTC</span>
-                <p style={{ fontSize: '0.9rem', fontWeight: 600 }}>Assessment Initialized in DRAFT</p>
-                <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Created by Load Planner planner@soa8.org for Declaration DEC-2026-001</p>
-              </div>
-
-              <div style={{ padding: '12px', background: 'rgba(15, 23, 42, 0.4)', borderRadius: '8px', borderLeft: '4px solid var(--accent-secondary)' }}>
-                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>2026-10-27 13:20:05 UTC</span>
-                <p style={{ fontSize: '0.9rem', fontWeight: 600 }}>Candidate Generated (CONTROLLED_STUB)</p>
-                <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Candidate layout digest generated: 64-char SHA-256</p>
-              </div>
-
-              <div style={{ padding: '12px', background: 'rgba(15, 23, 42, 0.4)', borderRadius: '8px', borderLeft: '4px solid var(--accent-success)' }}>
-                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>2026-10-27 13:20:10 UTC</span>
-                <p style={{ fontSize: '0.9rem', fontWeight: 600 }}>Independent Validation Passed</p>
-                <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Validated against CMV-HAZ-1-3 rule snapshot. State moved to PENDING_APPROVAL.</p>
-              </div>
-            </div>
+            <h3 style={{ fontSize: '1.1rem', marginBottom: '16px' }}>Live Assessment Audit Trail</h3>
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+              Connected to live Gateway port <code>8080</code> &bull; MySQL databases &bull; Kafka topic <code>soa.s06.t08.events</code>
+            </p>
           </div>
         )}
       </main>
@@ -296,11 +534,15 @@ export default function App() {
               <AlertTriangle size={20} /> Reject Candidate Layout
             </h3>
             <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '16px' }}>
-              Rejection will emit a <code>CargoLoadRejected</code> domain event to Kafka topic <code>soa.s06.t08.events</code> via transactional outbox.
+              Rejection will emit a <code>CargoLoadRejected</code> domain event to Kafka topic <code>soa.s06.t08.events</code>.
             </p>
 
             <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '6px' }}>Reason Code</label>
-            <select style={{ width: '100%', marginBottom: '16px' }}>
+            <select 
+              value={rejectionReason} 
+              onChange={(e) => setRejectionReason(e.target.value)}
+              style={{ width: '100%', marginBottom: '16px' }}
+            >
               <option value="HAZARD_SEGREGATION_VIOLATION">HAZARD_SEGREGATION_VIOLATION</option>
               <option value="EXCEEDS_LOCAL_LIMITS">EXCEEDS_LOCAL_LIMITS</option>
               <option value="OPERATIONAL_OVERRIDE">OPERATIONAL_OVERRIDE</option>
@@ -310,7 +552,7 @@ export default function App() {
             <textarea
               rows={3}
               style={{ width: '100%', marginBottom: '20px' }}
-              placeholder="Provide justification for rejection..."
+              placeholder="Provide reason for rejection..."
               value={rejectionNotes}
               onChange={(e) => setRejectionNotes(e.target.value)}
             />

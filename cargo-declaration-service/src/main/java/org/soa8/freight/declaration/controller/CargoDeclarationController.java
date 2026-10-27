@@ -85,7 +85,7 @@ public class CargoDeclarationController {
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<?> getDeclaration(@PathVariable String id) {
+    public ResponseEntity<?> getDeclaration(@PathVariable("id") String id) {
         return declarationRepository.findById(id)
                 .<ResponseEntity<?>>map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
@@ -95,7 +95,7 @@ public class CargoDeclarationController {
     }
 
     @GetMapping("/{id}/workflow")
-    public ResponseEntity<?> getWorkflowProjection(@PathVariable String id) {
+    public ResponseEntity<?> getWorkflowProjection(@PathVariable("id") String id) {
         Optional<DeclarationWorkflowProjection> projection = projectionRepository.findById(id);
         if (projection.isPresent()) {
             return ResponseEntity.ok(projection.get());

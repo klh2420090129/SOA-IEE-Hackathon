@@ -65,7 +65,7 @@ public class CompartmentController {
     }
 
     @GetMapping("/assessments/{id}")
-    public ResponseEntity<?> getAssessment(@PathVariable String id) {
+    public ResponseEntity<?> getAssessment(@PathVariable("id") String id) {
         return assessmentRepository.findById(id)
                 .<ResponseEntity<?>>map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
@@ -75,7 +75,7 @@ public class CompartmentController {
     }
 
     @PostMapping("/assessments/{id}/candidate")
-    public ResponseEntity<?> recordCandidate(@PathVariable String id, @RequestBody CandidateLayoutDto candidate) {
+    public ResponseEntity<?> recordCandidate(@PathVariable("id") String id, @RequestBody CandidateLayoutDto candidate) {
         try {
             AssessmentEntity updated = workflowService.recordCandidateLayout(id, candidate);
             return ResponseEntity.ok(updated);
@@ -85,7 +85,7 @@ public class CompartmentController {
     }
 
     @PostMapping("/assessments/{id}/validation")
-    public ResponseEntity<?> recordValidation(@PathVariable String id, @RequestBody ValidationResultDto validation) {
+    public ResponseEntity<?> recordValidation(@PathVariable("id") String id, @RequestBody ValidationResultDto validation) {
         try {
             AssessmentEntity updated = workflowService.recordValidationOutcome(id, validation);
             return ResponseEntity.ok(updated);
@@ -95,7 +95,7 @@ public class CompartmentController {
     }
 
     @PostMapping("/assessments/{id}/approve")
-    public ResponseEntity<?> approveCandidate(@PathVariable String id, @RequestBody DecisionRequest req) {
+    public ResponseEntity<?> approveCandidate(@PathVariable("id") String id, @RequestBody DecisionRequest req) {
         try {
             AssessmentEntity updated = workflowService.approveCandidate(
                     id, req.layoutVersion, req.expectedDigest,
@@ -114,7 +114,7 @@ public class CompartmentController {
     }
 
     @PostMapping("/assessments/{id}/reject")
-    public ResponseEntity<?> rejectCandidate(@PathVariable String id, @RequestBody DecisionRequest req) {
+    public ResponseEntity<?> rejectCandidate(@PathVariable("id") String id, @RequestBody DecisionRequest req) {
         try {
             AssessmentEntity updated = workflowService.rejectCandidate(
                     id, req.layoutVersion,
@@ -129,7 +129,7 @@ public class CompartmentController {
     }
 
     @GetMapping("/layouts/{id}/versions/{version}")
-    public ResponseEntity<?> getLayoutVersion(@PathVariable String id, @PathVariable int version) {
+    public ResponseEntity<?> getLayoutVersion(@PathVariable("id") String id, @PathVariable("version") int version) {
         return layoutRepository.findByAssessmentIdAndLayoutVersion(id, version)
                 .<ResponseEntity<?>>map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
