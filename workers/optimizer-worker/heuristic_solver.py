@@ -191,7 +191,11 @@ SUPPORTED_ALGORITHMS = {
     "HEURISTIC_EP_3D_V1",
     "PYTHON_HEURISTIC_EP_3D_V1",
     "PYTHON_ORTOOLS_CPSAT_3D_V1",
-    "ORTOOLS_CPSAT_3D_V1"
+    "ORTOOLS_CPSAT_3D_V1",
+    "PYTHON_CPSAT_3D_V1",
+    "CPSAT",
+    "CP_SAT",
+    "PYTHON_WORKER"
 }
 
 def solve_3d_packing(command: Dict[str, Any]) -> Dict[str, Any]:
