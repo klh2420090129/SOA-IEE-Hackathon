@@ -24,6 +24,7 @@ import {
   ValidationFindingDto
 } from '../types/api';
 import { CandidateViewer2D } from '../components/simulation/CandidateViewer2D';
+import { CandidateViewer3D } from '../components/simulation/CandidateViewer3D';
 import { useOptimizationJob } from '../hooks/useOptimizationJob';
 import { useAuth } from '../context/AuthContext';
 
@@ -49,6 +50,9 @@ export const PlannerReviewPage: React.FC = () => {
 
   // Algorithm Selection
   const [selectedAlgorithm, setSelectedAlgorithm] = useState<'HEURISTIC_EP_3D_V1' | 'PYTHON_CPSAT_3D_V1' | 'CONTROLLED_STUB'>('HEURISTIC_EP_3D_V1');
+
+  // Visualization View Mode: 3D interactive vs 2D/Table fallback
+  const [viewMode, setViewMode] = useState<'3d' | '2d'>('3d');
 
   // Rejection Modal
   const [showRejectModal, setShowRejectModal] = useState(false);
@@ -452,14 +456,62 @@ export const PlannerReviewPage: React.FC = () => {
         </div>
       )}
 
-      {/* 2D Candidate Layout Visualization & Tabular Fallback */}
-      <CandidateViewer2D
-        compartment={compartment}
-        layout={candidateLayout}
-        validation={validationResult}
-        isApproved={isApproved}
-        isRejected={isRejected}
-      />
+      {/* View Mode Toggle: 3D Interactive Simulation vs 2D Plan Fallback */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '10px' }}>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button
+            onClick={() => setViewMode('3d')}
+            style={{
+              padding: '6px 14px',
+              borderRadius: '6px',
+              fontSize: '0.85rem',
+              fontWeight: 600,
+              background: viewMode === '3d' ? 'var(--bg-secondary)' : 'transparent',
+              color: viewMode === '3d' ? 'var(--text-main)' : 'var(--text-muted)',
+              border: viewMode === '3d' ? '1px solid var(--border-color)' : '1px solid transparent'
+            }}
+          >
+            Interactive 3D Simulation
+          </button>
+          <button
+            onClick={() => setViewMode('2d')}
+            style={{
+              padding: '6px 14px',
+              borderRadius: '6px',
+              fontSize: '0.85rem',
+              fontWeight: 600,
+              background: viewMode === '2d' ? 'var(--bg-secondary)' : 'transparent',
+              color: viewMode === '2d' ? 'var(--text-main)' : 'var(--text-muted)',
+              border: viewMode === '2d' ? '1px solid var(--border-color)' : '1px solid transparent'
+            }}
+          >
+            2D Floor-Plan &amp; Table Fallback
+          </button>
+        </div>
+
+        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+          {viewMode === '3d' ? 'WebGL 3D Orbit Controls Enabled' : 'Accessible 2D SVG & Structured Coordinate Grid'}
+        </div>
+      </div>
+
+      {/* Primary Visualizer Viewport */}
+      {viewMode === '3d' ? (
+        <CandidateViewer3D
+          compartment={compartment}
+          layout={candidateLayout}
+          validation={validationResult}
+          isApproved={isApproved}
+          isRejected={isRejected}
+        />
+      ) : (
+        <CandidateViewer2D
+          compartment={compartment}
+          layout={candidateLayout}
+          validation={validationResult}
+          isApproved={isApproved}
+          isRejected={isRejected}
+        />
+      )}
 
       {/* Independent Validation Audit Details */}
       {validationResult && (
