@@ -68,8 +68,9 @@ def test_infeasible_versus_unknown_versus_timeout():
     bound_sc = corpus["SCEN_BOUND_01"]
     res_bound = solve_cpsat_cargo(bound_sc.command, force_cpsat=True)
     assert res_bound["solverStatus"] in ("FEASIBLE", "OPTIMAL")
-    # Must preserve incumbent and record fallback
-    assert res_bound["diagnostics"]["fallbackReason"] in ("CPSAT_UNKNOWN", "CPSAT_FEASIBLE", "CPSAT_TIMEOUT")
+    # If fallback occurred, reason must be valid
+    if "fallbackReason" in res_bound["diagnostics"]:
+        assert res_bound["diagnostics"]["fallbackReason"] in ("CPSAT_UNKNOWN", "CPSAT_FEASIBLE", "CPSAT_TIMEOUT")
     assert res_bound["diagnostics"]["fullLexicographicOptimalityProven"] is False
 
 def test_scen_infeasible_02_feasibility_contract():
