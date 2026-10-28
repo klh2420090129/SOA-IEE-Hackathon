@@ -186,3 +186,41 @@ def test_scenario_runner_preserves_hashes_and_aggregates_trials():
         assert t["unitsPlaced"] == 4
         assert t["independentValidationPassed"] is True
         assert t["primaryObjectiveProven"] is True
+
+def test_reconciled_metrics_denominators_and_infeasibility_separation():
+    """
+    Check 12: Verify that compute_cohort_metrics strictly excludes INFEASIBLE runs from primaryOptimizationProofRate,
+    and isolates infeasibilityProofRate to eligible requireAllPlaced=True runs.
+    """
+    from run_benchmarks import compute_cohort_metrics
+    scenarios = get_scenario_corpus()
+    
+    # Run a small slice of 1 optimization scenario and 1 infeasibility scenario
+    sc_opt = scenarios[0] # SCEN_SMALL_01 (opt)
+    sc_infeas = [s for s in scenarios if s.scenario_id == "SCEN_INFEASIBLE_01"][0] # infeas
+    
+    res_opt = run_single_scenario(sc_opt, num_trials=2, warmup=False)
+    res_infeas = run_single_scenario(sc_infeas, num_trials=2, warmup=False)
+    
+    cohort_metrics = compute_cohort_metrics([res_opt, res_infeas], num_trials=2)
+    
+    # Optimization runs per solver: exactly 2 (from 1 scenario)
+    assert cohort_metrics["optimizationRunsPerSolver"] == 2
+    # Infeasibility runs per solver: exactly 2 (from 1 scenario)
+    assert cohort_metrics["infeasibilityRunsPerSolver"] == 2
+    # Total runs per solver: 4
+    assert cohort_metrics["totalRunsPerSolver"] == 4
+    
+    # Infeasibility proof rate denominator must be 2, numerator 2 (100%)
+    assert cohort_metrics["infeasibilityProofRate"]["cpsatDenominator"] == 2
+    assert cohort_metrics["infeasibilityProofRate"]["cpsatNumerator"] == 2
+    assert cohort_metrics["infeasibilityProofRate"]["cpsatRatePct"] == 100.0
+    
+    # Primary optimization proof rate denominator must be 2, numerator 2 (100%)
+    assert cohort_metrics["primaryOptimizationProofRate"]["cpsatDenominator"] == 2
+    assert cohort_metrics["primaryOptimizationProofRate"]["cpsatNumerator"] == 2
+    assert cohort_metrics["primaryOptimizationProofRate"]["cpsatRatePct"] == 100.0
+    
+    # Heuristic infeasibility proof rate must be 0% (heuristic emits UNKNOWN, never claims proof)
+    assert cohort_metrics["infeasibilityProofRate"]["heuristicNumerator"] == 0
+    assert cohort_metrics["infeasibilityProofRate"]["heuristicRatePct"] == 0.0

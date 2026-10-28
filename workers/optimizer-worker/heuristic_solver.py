@@ -418,6 +418,8 @@ def solve_3d_packing(command: Dict[str, Any]) -> Dict[str, Any]:
         "ruleSnapshotDigest": rule_snapshot_digest or "N/A",
         "requestedAlgorithm": algorithm_requested or ALGORITHM_PROVENANCE,
         "effectiveAlgorithm": ALGORITHM_PROVENANCE,
+        "modelOptimalityProven": False,
+        "modelInfeasibilityProven": False,
         "primaryObjectiveProven": False,
         "volumeObjectiveProven": False,
         "compactnessObjectiveProven": False,
