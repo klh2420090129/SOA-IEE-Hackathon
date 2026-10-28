@@ -18,7 +18,7 @@ spring:
         - id: cargo-declaration-service-route
           uri: lb://cargo-declaration-service
           predicates:
-            - Path=/api/v1/declarations/**
+            - Path=/api/v1/declarations/**, /api/v1/cargo-templates/**
         - id: compatibility-rule-service-route
           uri: lb://compatibility-rule-service
           predicates:

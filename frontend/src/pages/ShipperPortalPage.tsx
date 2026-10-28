@@ -6,12 +6,15 @@ import {
   Search, 
   Send, 
   AlertCircle,
-  Upload
+  Upload,
+  Bookmark
 } from 'lucide-react';
 import { declarationApi } from '../api/declarationApi';
 import { CargoDeclaration, CargoItemInput, DeclarationWorkflowProjection } from '../types/api';
 import { useAuth } from '../context/AuthContext';
 import { BulkCargoImportModal } from '../components/declaration/BulkCargoImportModal';
+import { SaveTemplateModal } from '../components/declaration/SaveTemplateModal';
+import { SavedCargoTemplatesModal } from '../components/declaration/SavedCargoTemplatesModal';
 
 export const ShipperPortalPage: React.FC = () => {
   const { user } = useAuth();
@@ -57,12 +60,22 @@ export const ShipperPortalPage: React.FC = () => {
   const [searchLoading, setSearchLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [isSaveTemplateModalOpen, setIsSaveTemplateModalOpen] = useState(false);
+  const [isSavedTemplatesModalOpen, setIsSavedTemplatesModalOpen] = useState(false);
 
   const handleImportItems = (importedItems: CargoItemInput[], replaceExisting: boolean) => {
     if (replaceExisting) {
       setItems(importedItems);
     } else {
       setItems((prev) => [...prev, ...importedItems]);
+    }
+  };
+
+  const handleLoadTemplate = (templateItems: CargoItemInput[], replaceExisting: boolean) => {
+    if (replaceExisting) {
+      setItems(templateItems);
+    } else {
+      setItems((prev) => [...prev, ...templateItems]);
     }
   };
 
@@ -294,11 +307,50 @@ export const ShipperPortalPage: React.FC = () => {
         </div>
 
         {/* Cargo Items Table */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
           <h4 style={{ margin: 0, fontSize: '0.95rem' }}>
             Consignment Cargo Items ({items.length})
           </h4>
-          <div style={{ display: 'flex', gap: '8px' }}>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              data-testid="open-saved-templates-btn"
+              onClick={() => setIsSavedTemplatesModalOpen(true)}
+              style={{
+                padding: '6px 12px',
+                background: 'rgba(168, 85, 247, 0.15)',
+                color: '#c084fc',
+                border: '1px solid rgba(168, 85, 247, 0.3)',
+                borderRadius: '6px',
+                fontSize: '0.8rem',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                cursor: 'pointer'
+              }}
+            >
+              <Bookmark size={14} /> Saved Templates
+            </button>
+            <button
+              type="button"
+              data-testid="open-save-template-btn"
+              onClick={() => setIsSaveTemplateModalOpen(true)}
+              disabled={items.length === 0}
+              style={{
+                padding: '6px 12px',
+                background: items.length === 0 ? 'rgba(255, 255, 255, 0.05)' : 'rgba(234, 179, 8, 0.15)',
+                color: items.length === 0 ? 'var(--text-muted)' : '#facc15',
+                border: items.length === 0 ? '1px solid var(--border-color)' : '1px solid rgba(234, 179, 8, 0.3)',
+                borderRadius: '6px',
+                fontSize: '0.8rem',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                cursor: items.length === 0 ? 'not-allowed' : 'pointer'
+              }}
+            >
+              <Bookmark size={14} /> Save as Template
+            </button>
             <button
               type="button"
               data-testid="open-bulk-import-btn"
@@ -483,6 +535,21 @@ export const ShipperPortalPage: React.FC = () => {
         isOpen={isImportModalOpen}
         onClose={() => setIsImportModalOpen(false)}
         onImportItems={handleImportItems}
+        existingItemCount={items.length}
+      />
+
+      {/* Save Template Modal */}
+      <SaveTemplateModal
+        isOpen={isSaveTemplateModalOpen}
+        onClose={() => setIsSaveTemplateModalOpen(false)}
+        items={items}
+      />
+
+      {/* Saved Cargo Templates Modal */}
+      <SavedCargoTemplatesModal
+        isOpen={isSavedTemplatesModalOpen}
+        onClose={() => setIsSavedTemplatesModalOpen(false)}
+        onLoadTemplate={handleLoadTemplate}
         existingItemCount={items.length}
       />
     </div>

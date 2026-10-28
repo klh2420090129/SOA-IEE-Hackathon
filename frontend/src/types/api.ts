@@ -65,7 +65,34 @@ export interface DeclarationWorkflowProjection {
   updatedAt?: string | null;
 }
 
-// Compartment & Assessment types
+// Cargo Template types
+export interface CargoTemplateItem extends CargoItemInput {
+  id?: string;
+}
+
+export interface CargoTemplate {
+  id: string;
+  shipperId: string;
+  name: string;
+  description?: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  items: CargoTemplateItem[];
+}
+
+export interface CreateTemplateRequest {
+  name: string;
+  description?: string;
+  items: CargoItemInput[];
+}
+
+export interface UpdateTemplateRequest {
+  name?: string;
+  description?: string;
+  items?: CargoItemInput[];
+}
+
 export interface CompartmentDto {
   compartmentId: string;
   name?: string;
