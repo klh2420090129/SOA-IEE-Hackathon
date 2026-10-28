@@ -187,6 +187,13 @@ def compute_content_digest(placements: List[Dict[str, Any]]) -> str:
     serialized = json.dumps(canonical_list, separators=(',', ':'), sort_keys=True)
     return hashlib.sha256(serialized.encode('utf-8')).hexdigest()
 
+SUPPORTED_ALGORITHMS = {
+    "HEURISTIC_EP_3D_V1",
+    "PYTHON_HEURISTIC_EP_3D_V1",
+    "PYTHON_ORTOOLS_CPSAT_3D_V1",
+    "ORTOOLS_CPSAT_3D_V1"
+}
+
 def solve_3d_packing(command: Dict[str, Any]) -> Dict[str, Any]:
     start_time = time.time()
     job_id = command.get("jobId", "")
@@ -195,6 +202,9 @@ def solve_3d_packing(command: Dict[str, Any]) -> Dict[str, Any]:
     rule_snapshot_id = command.get("ruleSnapshotId", "")
     rule_snapshot_digest = command.get("ruleSnapshotDigest")
     time_limit_sec = command.get("timeLimitSeconds", 20)
+    algorithm_requested = command.get("algorithm", "")
+    if algorithm_requested and algorithm_requested.strip() not in SUPPORTED_ALGORITHMS:
+        raise ValueError(f"Unsupported algorithm identifier: {algorithm_requested}")
 
     compartment = command.get("compartment", {})
     comp_l = int(compartment.get("lengthMm", 0))
@@ -399,7 +409,9 @@ def solve_3d_packing(command: Dict[str, Any]) -> Dict[str, Any]:
         "unitsPlaced": len(placed_items),
         "unitsUnassigned": len(unassigned_items),
         "evaluations": evaluations_count,
-        "ruleSnapshotDigest": rule_snapshot_digest or "N/A"
+        "ruleSnapshotDigest": rule_snapshot_digest or "N/A",
+        "requestedAlgorithm": algorithm_requested or ALGORITHM_PROVENANCE,
+        "effectiveAlgorithm": ALGORITHM_PROVENANCE
     }
 
     result = {

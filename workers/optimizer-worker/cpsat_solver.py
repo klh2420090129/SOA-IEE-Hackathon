@@ -20,7 +20,19 @@ from heuristic_solver import (
 logger = logging.getLogger("CpSatCargoSolver")
 
 PROVENANCE_CP_SAT = "PYTHON_ORTOOLS_CPSAT_3D_V1"
+PROVENANCE_HEURISTIC = "PYTHON_HEURISTIC_EP_3D_V1"
 ALGORITHM_VERSION = "1.0.0-phaseD"
+
+# Explicit supported algorithm identifiers
+SUPPORTED_ALGORITHMS = {
+    "PYTHON_ORTOOLS_CPSAT_3D_V1",
+    "PYTHON_HEURISTIC_EP_3D_V1",
+    "PYTHON_WORKER",
+    "HEURISTIC_EP_3D_V1",
+    "PYTHON_CPSAT_3D_V1",
+    "CPSAT",
+    "CP_SAT"
+}
 
 # Mathematical constants for lexicographically sound multi-level scalarization
 # Tier 1 (Count): 10,000,000 per unit placed
@@ -138,9 +150,18 @@ def solve_cpsat_cargo(command: Dict[str, Any],
     rule_snapshot_digest = command.get("ruleSnapshotDigest")
     total_time_limit_sec = command.get("timeLimitSeconds", 20)
     algorithm_requested = command.get("algorithm", "")
+    if algorithm_requested and algorithm_requested.strip() not in SUPPORTED_ALGORITHMS:
+        raise ValueError(f"Unsupported algorithm identifier: {algorithm_requested}")
+
+    require_all_placed = bool(command.get("requireAllPlaced", False))
 
     # Execute deterministic heuristic first for bounded baseline & warm start
     heuristic_res = solve_heuristic(command)
+    if "diagnostics" in heuristic_res:
+        if "requestedAlgorithm" not in heuristic_res["diagnostics"]:
+            heuristic_res["diagnostics"]["requestedAlgorithm"] = algorithm_requested or PROVENANCE_HEURISTIC
+        heuristic_res["diagnostics"]["effectiveAlgorithm"] = heuristic_res.get("provenance", PROVENANCE_HEURISTIC)
+
     h_placements = heuristic_res.get("placements", [])
     h_unassigned = heuristic_res.get("unassignedItems", [])
     h_duration_ms = heuristic_res.get("executionDurationMs", 0)
@@ -196,6 +217,7 @@ def solve_cpsat_cargo(command: Dict[str, Any],
         logger.info("Problem scale (units=%d) exceeds CP-SAT bound or scale unsuitable. Preserving heuristic incumbent.", len(physical_units))
         heuristic_res["diagnostics"]["cpsatInvoked"] = False
         heuristic_res["diagnostics"]["fallbackReason"] = "SCALE_EXCEEDS_BOUND_PRESERVED_INCUMBENT" if len(physical_units) > 25 else "EMPTY_INPUT"
+        heuristic_res["diagnostics"]["effectiveAlgorithm"] = heuristic_res.get("provenance", PROVENANCE_HEURISTIC)
         return heuristic_res
 
     # Formulate CP-SAT model
@@ -257,6 +279,11 @@ def solve_cpsat_cargo(command: Dict[str, Any],
     weight_units = [int(round(u.weight_kg * 10)) for u in physical_units]
     max_payload_units = int(round(max_payload_kg * 10))
     model.Add(sum(placed_vars[i] * weight_units[i] for i in range(n)) <= max_payload_units)
+
+    # If complete placement is strictly required (for infeasibility proof testing), enforce all placed
+    if require_all_placed:
+        for i in range(n):
+            model.Add(placed_vars[i] == 1)
 
     # 2. Pairwise 3D Non-Overlap Constraints between placed units
     for i in range(n):
@@ -341,19 +368,50 @@ def solve_cpsat_cargo(command: Dict[str, Any],
                                 four_min_dist_sq = 4 * min_dist * min_dist
                                 model.Add(diff_x_sq + diff_y_sq + diff_z_sq >= four_min_dist_sq).OnlyEnforceIf([placed_vars[i], placed_vars[j]])
 
-    # 4. Stacking capability fail-closed restriction:
-    # If a unit is non-stackable or has unknown capability, no other unit can be placed directly above it
-    for i in range(n):
-        if not physical_units[i].stackable:
-            for j in range(n):
-                if i != j:
-                    # Unit j cannot sit on top of unit i
-                    # i.e., NOT (z_j == z_i + dz_i AND horizontal overlap)
+    # 4. Stacking capability & bottom support fail-closed restrictions:
+    # A unit placed with z > 0 must be physically supported by the floor or supporting cargo.
+    # Furthermore, non-stackable units cannot support any unit above them.
+    for j in range(n):
+        on_floor = model.NewBoolVar(f"on_floor_{j}")
+        model.Add(z_vars[j] == 0).OnlyEnforceIf(on_floor)
+        model.Add(z_vars[j] > 0).OnlyEnforceIf(on_floor.Not())
+
+        support_conditions = []
+        for i in range(n):
+            if i != j:
+                # If i is non-stackable, j CANNOT sit on top of i
+                if not physical_units[i].stackable:
                     on_top = model.NewBoolVar(f"on_top_{j}_{i}")
                     model.Add(z_vars[j] == z_vars[i] + dz_vars[i]).OnlyEnforceIf(on_top)
                     model.Add(z_vars[j] != z_vars[i] + dz_vars[i]).OnlyEnforceIf(on_top.Not())
-                    # If i is non-stackable, on_top is forbidden when both are placed
                     model.Add(on_top == 0).OnlyEnforceIf([placed_vars[i], placed_vars[j]])
+                else:
+                    # Item i is stackable: it can potentially support item j
+                    sup_i_j = model.NewBoolVar(f"supported_by_{i}_{j}")
+                    at_top = model.NewBoolVar(f"top_{i}_{j}")
+                    model.Add(z_vars[j] == z_vars[i] + dz_vars[i]).OnlyEnforceIf(at_top)
+                    model.Add(z_vars[j] != z_vars[i] + dz_vars[i]).OnlyEnforceIf(at_top.Not())
+
+                    # Horizontal overlap (not separated in x and not separated in y)
+                    sep_x1 = model.NewBoolVar(f"sx1_{i}_{j}")
+                    sep_x2 = model.NewBoolVar(f"sx2_{i}_{j}")
+                    sep_y1 = model.NewBoolVar(f"sy1_{i}_{j}")
+                    sep_y2 = model.NewBoolVar(f"sy2_{i}_{j}")
+                    model.Add(x_vars[j] + dx_vars[j] <= x_vars[i]).OnlyEnforceIf(sep_x1)
+                    model.Add(x_vars[i] + dx_vars[i] <= x_vars[j]).OnlyEnforceIf(sep_x2)
+                    model.Add(y_vars[j] + dy_vars[j] <= y_vars[i]).OnlyEnforceIf(sep_y1)
+                    model.Add(y_vars[i] + dy_vars[i] <= y_vars[j]).OnlyEnforceIf(sep_y2)
+
+                    model.Add(sup_i_j <= at_top)
+                    model.Add(sup_i_j <= placed_vars[i])
+                    model.Add(sep_x1 == 0).OnlyEnforceIf(sup_i_j)
+                    model.Add(sep_x2 == 0).OnlyEnforceIf(sup_i_j)
+                    model.Add(sep_y1 == 0).OnlyEnforceIf(sup_i_j)
+                    model.Add(sep_y2 == 0).OnlyEnforceIf(sup_i_j)
+
+                    support_conditions.append(sup_i_j)
+
+        model.AddBoolOr([on_floor] + support_conditions).OnlyEnforceIf(placed_vars[j])
 
     # 5. Warm start / Solution hint from verified Heuristic incumbent
     if h_placements:
@@ -375,11 +433,6 @@ def solve_cpsat_cargo(command: Dict[str, Any],
     # Stage 1: Maximize safely assigned cargo count (Primary priority)
     # Stage 2: Maximize assigned cargo volume (Secondary priority, given count)
     # Stage 3: Minimize position spread / handling cost (Tertiary priority, given count and volume)
-    #
-    # Respecting time budget: budget is split across stages.
-    # If Stage 1 times out or finds a feasible incumbent, we use that incumbent.
-    # If Stage 1 proves optimality, we constrain count to opt_count and proceed to Stage 2.
-    # If Stage 2 proves optimality, we constrain volume to opt_vol and proceed to Stage 3.
 
     stage1_budget = max(0.5, remaining_budget * 0.5)
     stage2_budget = max(0.5, remaining_budget * 0.3)
@@ -530,26 +583,34 @@ def solve_cpsat_cargo(command: Dict[str, Any],
                         "wallTimeSeconds": solver.WallTime(),
                         "objectiveValue": layout_eval["scalarObjective"],
                         "scalarEvaluationScore": layout_eval["scalarObjective"],
-                        "validatedIndependently": True
+                        "validatedIndependently": True,
+                        "requestedAlgorithm": algorithm_requested or PROVENANCE_CP_SAT,
+                        "effectiveAlgorithm": PROVENANCE_CP_SAT
                     }
                 }
             else:
                 logger.info("CP-SAT solution had fewer placed units than heuristic incumbent. Preserving heuristic solution.")
                 heuristic_res["diagnostics"]["cpsatInvoked"] = True
                 heuristic_res["diagnostics"]["fallbackReason"] = "INCUMBENT_SUPERIOR_QUANTITY"
+                heuristic_res["diagnostics"]["requestedAlgorithm"] = algorithm_requested or PROVENANCE_CP_SAT
+                heuristic_res["diagnostics"]["effectiveAlgorithm"] = heuristic_res.get("provenance", PROVENANCE_HEURISTIC)
                 return heuristic_res
         else:
             logger.warning("CP-SAT candidate failed independent revalidation: %s. Falling back to heuristic incumbent.", validation_err)
             heuristic_res["diagnostics"]["cpsatInvoked"] = True
             heuristic_res["diagnostics"]["fallbackReason"] = f"CPSAT_REVALIDATION_FAILED: {validation_err}"
+            heuristic_res["diagnostics"]["requestedAlgorithm"] = algorithm_requested or PROVENANCE_CP_SAT
+            heuristic_res["diagnostics"]["effectiveAlgorithm"] = heuristic_res.get("provenance", PROVENANCE_HEURISTIC)
             return heuristic_res
 
-    elif solver_status_code == cp_model.INFEASIBLE:
-        # If model is proven INFEASIBLE and physical_units were present, report proven infeasibility or fallback
-        logger.info("CP-SAT proved problem infeasible for complete placement.")
-        if h_placements:
-            # Partial placement exists from heuristic
+    elif final_status_code == cp_model.INFEASIBLE:
+        # If model is proven INFEASIBLE and physical_units were present, report proven infeasibility
+        logger.info("CP-SAT proved problem infeasible.")
+        if h_placements and not require_all_placed:
+            # Partial placement exists from heuristic and all items were not strictly required
             heuristic_res["diagnostics"]["cpsatStatus"] = "INFEASIBLE_FOR_FULL_SET"
+            heuristic_res["diagnostics"]["requestedAlgorithm"] = algorithm_requested or PROVENANCE_CP_SAT
+            heuristic_res["diagnostics"]["effectiveAlgorithm"] = heuristic_res.get("provenance", PROVENANCE_HEURISTIC)
             return heuristic_res
         else:
             return {
@@ -573,12 +634,16 @@ def solve_cpsat_cargo(command: Dict[str, Any],
                 "diagnostics": {
                     "engine": PROVENANCE_CP_SAT,
                     "cpSatStatus": "INFEASIBLE",
-                    "proof": "CP-SAT exhaustive search proved no solution exists"
+                    "proof": "CP-SAT exhaustive search proved no solution exists",
+                    "requestedAlgorithm": algorithm_requested or PROVENANCE_CP_SAT,
+                    "effectiveAlgorithm": PROVENANCE_CP_SAT
                 }
             }
     else:
         # TIMEOUT or UNKNOWN
-        logger.info("CP-SAT search returned %s. Preserving best valid heuristic incumbent.", solver.StatusName(solver_status_code))
+        logger.info("CP-SAT search returned %s. Preserving best valid heuristic incumbent.", solver.StatusName(final_status_code))
         heuristic_res["diagnostics"]["cpsatInvoked"] = True
-        heuristic_res["diagnostics"]["fallbackReason"] = f"CPSAT_{solver.StatusName(solver_status_code)}"
+        heuristic_res["diagnostics"]["fallbackReason"] = f"CPSAT_{solver.StatusName(final_status_code)}"
+        heuristic_res["diagnostics"]["requestedAlgorithm"] = algorithm_requested or PROVENANCE_CP_SAT
+        heuristic_res["diagnostics"]["effectiveAlgorithm"] = heuristic_res.get("provenance", PROVENANCE_HEURISTIC)
         return heuristic_res
