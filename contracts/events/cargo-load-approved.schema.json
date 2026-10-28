@@ -1,0 +1,44 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CargoLoadApprovedEvent",
+  "type": "object",
+  "required": [
+    "eventId",
+    "eventType",
+    "aggregateId",
+    "aggregateType",
+    "schemaVersion",
+    "occurredAt",
+    "correlationId",
+    "payload"
+  ],
+  "properties": {
+    "eventId": { "type": "string", "format": "uuid" },
+    "eventType": { "type": "string", "enum": ["CargoLoadApproved"] },
+    "aggregateId": { "type": "string" },
+    "aggregateType": { "type": "string", "enum": ["Assessment"] },
+    "schemaVersion": { "type": "string" },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "correlationId": { "type": "string" },
+    "payload": {
+      "type": "object",
+      "required": [
+        "assessmentId",
+        "declarationId",
+        "declarationVersion",
+        "approvedBy"
+      ],
+      "properties": {
+        "assessmentId": { "type": "string" },
+        "declarationId": { "type": "string" },
+        "declarationVersion": { "type": "integer" },
+        "layoutVersion": { "type": "integer" },
+        "layoutDigest": { "type": "string" },
+        "ruleSnapshotId": { "type": "string" },
+        "validationId": { "type": "string" },
+        "approvedBy": { "type": "string" },
+        "approvalNotes": { "type": "string" }
+      }
+    }
+  }
+}

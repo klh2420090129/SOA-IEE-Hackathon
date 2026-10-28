@@ -494,3 +494,54 @@ def test_invalid_or_out_of_range_inputs_handled_safely():
     assert len(res.get("placements", [])) == 0
     assert res.get("solverStatus") in ("UNKNOWN", "INFEASIBLE")
 
+def test_cog_evaluation_exact_hand_calculated_layout():
+    from cpsat_solver import compute_standard_layout_evaluation
+    # Item 1: mass=100kg, pos=(0, 0, 0), dims=(1000, 1000, 1000) -> center=(500, 500, 500)
+    # Item 2: mass=300kg, pos=(2000, 1000, 0), dims=(1000, 1000, 1000) -> center=(2500, 1500, 500)
+    placements = [
+        {"cargoItemId": "it1", "xMm": 0, "yMm": 0, "zMm": 0, "lengthMm": 1000, "widthMm": 1000, "heightMm": 1000, "weightKg": 100.0},
+        {"cargoItemId": "it2", "xMm": 2000, "yMm": 1000, "zMm": 0, "lengthMm": 1000, "widthMm": 1000, "heightMm": 1000, "weightKg": 300.0}
+    ]
+    comp = {"lengthMm": 10000, "widthMm": 2000, "heightMm": 2000, "maxPayloadKg": 25000.0}
+    eval_res = compute_standard_layout_evaluation(placements, comp)
+
+    assert eval_res["totalWeightKg"] == 400.0
+    assert eval_res["cogXMm"] == 2000.0
+    assert eval_res["cogYMm"] == 1250.0
+    assert eval_res["cogZMm"] == 500.0
+    assert eval_res["loadBalanceStatus"] == "NOT_CONFIGURED"
+
+def test_cog_empty_and_zero_mass_layout_safe():
+    from cpsat_solver import compute_standard_layout_evaluation
+    comp = {"lengthMm": 6000, "widthMm": 2400, "heightMm": 2400, "maxPayloadKg": 10000.0}
+    eval_res = compute_standard_layout_evaluation([], comp)
+    assert eval_res["totalWeightKg"] == 0.0
+    assert eval_res["cogXMm"] == 3000.0
+    assert eval_res["cogYMm"] == 1200.0
+    assert eval_res["cogZMm"] == 0.0
+    assert eval_res["loadBalanceStatus"] == "NOT_CONFIGURED"
+
+def test_validate_candidate_strictly_enforces_cog_boundaries():
+    comp = {
+        "lengthMm": 10000,
+        "widthMm": 2000,
+        "heightMm": 2000,
+        "maxPayloadKg": 25000.0,
+        "minCogXMm": 2500.0,
+        "maxCogXMm": 5000.0
+    }
+    # Item placed at front: center cx = 500mm (< minCogXMm 2500.0)
+    placements_forward = [
+        {"cargoItemId": "it1", "xMm": 0, "yMm": 0, "zMm": 0, "lengthMm": 1000, "widthMm": 1000, "heightMm": 1000, "weightKg": 500.0, "hazardClass": "NON_HAZ"}
+    ]
+    is_valid, err = validate_candidate_strictly(placements_forward, comp, [])
+    assert is_valid is False
+    assert "forward of configured minimum boundary" in err
+
+    # Item placed in boundary: center cx = 3000mm (x=2500, L=1000)
+    placements_valid = [
+        {"cargoItemId": "it1", "xMm": 2500, "yMm": 0, "zMm": 0, "lengthMm": 1000, "widthMm": 1000, "heightMm": 1000, "weightKg": 500.0, "hazardClass": "NON_HAZ"}
+    ]
+    is_valid_ok, err_ok = validate_candidate_strictly(placements_valid, comp, [])
+    assert is_valid_ok is True
+    assert err_ok is None

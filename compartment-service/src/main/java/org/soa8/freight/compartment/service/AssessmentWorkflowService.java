@@ -3,14 +3,17 @@ package org.soa8.freight.compartment.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.soa8.freight.common.constants.EventTopics;
+import org.soa8.freight.common.events.CargoLoadApprovedPayload;
 import org.soa8.freight.common.events.CargoLoadRejectedPayload;
 import org.soa8.freight.common.events.DomainEvent;
 import org.soa8.freight.common.model.*;
 import org.soa8.freight.common.util.CandidateDigestUtils;
 import org.soa8.freight.common.util.DigestUtils;
+import org.soa8.freight.compartment.model.AssessmentDecisionAuditEntity;
 import org.soa8.freight.compartment.model.AssessmentEntity;
 import org.soa8.freight.compartment.model.CandidateLayoutEntity;
 import org.soa8.freight.compartment.model.OutboxEventEntity;
+import org.soa8.freight.compartment.repository.AssessmentDecisionAuditRepository;
 import org.soa8.freight.compartment.repository.AssessmentRepository;
 import org.soa8.freight.compartment.repository.CandidateLayoutRepository;
 import org.soa8.freight.compartment.repository.OutboxEventRepository;
@@ -30,17 +33,20 @@ public class AssessmentWorkflowService {
     private final AssessmentRepository assessmentRepository;
     private final CandidateLayoutRepository layoutRepository;
     private final OutboxEventRepository outboxEventRepository;
+    private final AssessmentDecisionAuditRepository decisionAuditRepository;
     private final ObjectMapper objectMapper;
     private final org.soa8.freight.compartment.client.ValidationServiceClient validationClient;
 
     public AssessmentWorkflowService(AssessmentRepository assessmentRepository,
                                      CandidateLayoutRepository layoutRepository,
                                      OutboxEventRepository outboxEventRepository,
+                                     AssessmentDecisionAuditRepository decisionAuditRepository,
                                      ObjectMapper objectMapper,
                                      org.soa8.freight.compartment.client.ValidationServiceClient validationClient) {
         this.assessmentRepository = assessmentRepository;
         this.layoutRepository = layoutRepository;
         this.outboxEventRepository = outboxEventRepository;
+        this.decisionAuditRepository = decisionAuditRepository;
         this.objectMapper = objectMapper;
         this.validationClient = validationClient;
     }
@@ -252,14 +258,77 @@ public class AssessmentWorkflowService {
             throw new IllegalStateException("Cannot approve candidate layout with unresolved solver status: " + status);
         }
 
+        Instant now = Instant.now();
         assessment.setApprovalDecision("APPROVED");
         assessment.setDecidedBy(plannerId);
         assessment.setDecisionNotes(notes);
-        assessment.setDecisionTimestamp(Instant.now());
+        assessment.setDecisionTimestamp(now);
         assessment.setWorkflowStatus("APPROVED");
-        assessment.setUpdatedAt(Instant.now());
+        assessment.setUpdatedAt(now);
 
-        return assessmentRepository.save(assessment);
+        AssessmentEntity updated = assessmentRepository.save(assessment);
+
+        // Append-only decision audit log
+        String auditId = UUID.randomUUID().toString();
+        AssessmentDecisionAuditEntity auditEntry = new AssessmentDecisionAuditEntity(
+                auditId,
+                assessment.getId(),
+                assessment.getDeclarationId(),
+                assessment.getDeclarationVersion(),
+                assessment.getCandidateLayoutVersion(),
+                assessment.getCandidateContentDigest(),
+                assessment.getRuleSnapshotId(),
+                assessment.getValidationId(),
+                "APPROVED",
+                null,
+                notes,
+                plannerId,
+                now,
+                UUID.randomUUID().toString()
+        );
+        decisionAuditRepository.save(auditEntry);
+        log.info("Recorded append-only decision audit entry for approval: [{}] on assessment [{}]",
+                auditId, assessment.getId());
+
+        // Transactional Outbox: schedule CargoLoadApproved domain event for Kafka
+        CargoLoadApprovedPayload payload = new CargoLoadApprovedPayload(
+                assessment.getId(),
+                assessment.getDeclarationId(),
+                assessment.getDeclarationVersion(),
+                assessment.getCandidateLayoutVersion(),
+                assessment.getCandidateContentDigest(),
+                assessment.getRuleSnapshotId(),
+                assessment.getValidationId(),
+                plannerId,
+                notes
+        );
+
+        DomainEvent<CargoLoadApprovedPayload> event = new DomainEvent<>(
+                EventTopics.EVENT_TYPE_CARGO_LOAD_APPROVED,
+                assessment.getId(),
+                "Assessment",
+                EventTopics.SCHEMA_VERSION_1,
+                auditEntry.getCorrelationId(),
+                payload
+        );
+
+        try {
+            String eventJson = objectMapper.writeValueAsString(event);
+            OutboxEventEntity outboxEvent = new OutboxEventEntity(
+                    event.getEventId(),
+                    event.getEventType(),
+                    event.getAggregateId(),
+                    event.getAggregateType(),
+                    EventTopics.CARGO_EVENTS_TOPIC,
+                    eventJson
+            );
+            outboxEventRepository.save(outboxEvent);
+            log.info("Recorded transactional outbox event for approval: [{}]", event.getEventId());
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Failed to serialize approval outbox event", e);
+        }
+
+        return updated;
     }
 
     @Transactional
@@ -269,15 +338,46 @@ public class AssessmentWorkflowService {
                 .orElseThrow(() -> new IllegalArgumentException("Assessment not found: " + assessmentId));
 
         // Permitted states for rejection: CANDIDATE_READY, PENDING_APPROVAL, VALIDATION_FAILED
+        if ("APPROVED".equals(assessment.getWorkflowStatus()) || "REJECTED".equals(assessment.getWorkflowStatus())) {
+            throw new IllegalStateException("Assessment is already in terminal state [" + assessment.getWorkflowStatus() + "] and cannot be rejected");
+        }
+
+        if (layoutVersion > 0 && assessment.getCandidateLayoutVersion() > 0 && layoutVersion != assessment.getCandidateLayoutVersion()) {
+            throw new IllegalStateException("Candidate layout version mismatch on rejection. Stale version [" + layoutVersion + "] != current [" + assessment.getCandidateLayoutVersion() + "]");
+        }
+
+        Instant now = Instant.now();
         assessment.setApprovalDecision("REJECTED");
         assessment.setDecidedBy(plannerId);
         assessment.setDecisionReasonCode(reasonCode);
         assessment.setDecisionNotes(notes);
-        assessment.setDecisionTimestamp(Instant.now());
+        assessment.setDecisionTimestamp(now);
         assessment.setWorkflowStatus("REJECTED");
-        assessment.setUpdatedAt(Instant.now());
+        assessment.setUpdatedAt(now);
 
         AssessmentEntity updated = assessmentRepository.save(assessment);
+
+        // Append-only decision audit log
+        String auditId = UUID.randomUUID().toString();
+        AssessmentDecisionAuditEntity auditEntry = new AssessmentDecisionAuditEntity(
+                auditId,
+                assessment.getId(),
+                assessment.getDeclarationId(),
+                assessment.getDeclarationVersion(),
+                assessment.getCandidateLayoutVersion(),
+                assessment.getCandidateContentDigest(),
+                assessment.getRuleSnapshotId(),
+                assessment.getValidationId(),
+                "REJECTED",
+                reasonCode,
+                notes,
+                plannerId,
+                now,
+                UUID.randomUUID().toString()
+        );
+        decisionAuditRepository.save(auditEntry);
+        log.info("Recorded append-only decision audit entry for rejection: [{}] on assessment [{}]",
+                auditId, assessment.getId());
 
         // Transactional Outbox: schedule CargoLoadRejected domain event for Kafka
         CargoLoadRejectedPayload payload = new CargoLoadRejectedPayload(
@@ -297,7 +397,7 @@ public class AssessmentWorkflowService {
                 assessment.getId(),
                 "Assessment",
                 EventTopics.SCHEMA_VERSION_1,
-                UUID.randomUUID().toString(),
+                auditEntry.getCorrelationId(),
                 payload
         );
 

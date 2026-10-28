@@ -271,3 +271,36 @@ def test_cross_language_candidate_digest_parity():
     }
     assert compute_content_digest([p1, p2]) == "c37d14aad45e2ad525a7761a4f5b2dc4c25ded8ba3c612bf51cd1ba68e69cb4d"
 
+def test_heuristic_solver_reports_evaluation_with_cog():
+    cmd = {
+        "commandId": "cmd-heur-cog",
+        "jobId": "job-heur-cog",
+        "attemptId": "att-1",
+        "compartment": {
+            "compartmentId": "comp-1",
+            "lengthMm": 10000,
+            "widthMm": 2000,
+            "heightMm": 2000,
+            "maxPayloadKg": 25000.0
+        },
+        "items": [
+            {
+                "cargoItemId": "box-1",
+                "lengthMm": 1000,
+                "widthMm": 1000,
+                "heightMm": 1000,
+                "weightKg": 200.0,
+                "quantity": 1
+            }
+        ]
+    }
+    res = solve_3d_packing(cmd)
+    assert "evaluation" in res
+    ev = res["evaluation"]
+    assert ev["unitsPlaced"] == 1
+    assert ev["totalWeightKg"] == 200.0
+    # Placed at origin (0, 0, 0) -> center (500, 500, 500)
+    assert ev["cogXMm"] == 500.0
+    assert ev["cogYMm"] == 500.0
+    assert ev["cogZMm"] == 500.0
+    assert ev["loadBalanceStatus"] == "NOT_CONFIGURED"

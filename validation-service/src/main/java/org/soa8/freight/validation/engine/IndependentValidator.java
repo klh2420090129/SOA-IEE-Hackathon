@@ -205,14 +205,169 @@ public class IndependentValidator {
             }
         }
 
+        // 5. Independent Centre of Gravity (CoG) and Load-Balance Feasibility
+        double sumMass = 0.0;
+        double sumMassX = 0.0;
+        double sumMassY = 0.0;
+        double sumMassZ = 0.0;
+        boolean hasInvalidMassOrGeometry = false;
+
+        for (ItemPlacementDto item : placements) {
+            double mass = item.getWeightKg();
+            if (Double.isNaN(mass) || Double.isInfinite(mass) || mass < 0.0) {
+                findings.add(new ValidationFindingDto(
+                        "CRITICAL", "INVALID_MASS_DATA",
+                        "Item " + item.getCargoItemId() + " has invalid mass: " + mass,
+                        List.of(item.getCargoItemId())
+                ));
+                hasInvalidMassOrGeometry = true;
+                continue;
+            }
+
+            if (Double.isNaN(item.getXMm()) || Double.isNaN(item.getYMm()) || Double.isNaN(item.getZMm()) ||
+                Double.isNaN(item.getLengthMm()) || Double.isNaN(item.getWidthMm()) || Double.isNaN(item.getHeightMm())) {
+                findings.add(new ValidationFindingDto(
+                        "CRITICAL", "NON_FINITE_COORDINATES",
+                        "Item " + item.getCargoItemId() + " has non-finite geometry or coordinates",
+                        List.of(item.getCargoItemId())
+                ));
+                hasInvalidMassOrGeometry = true;
+                continue;
+            }
+
+            // Package centre point accounting for placed geometry and orientation:
+            // x_i = x + L/2.0, y_i = y + W/2.0, z_i = z + H/2.0
+            double cx = item.getXMm() + (item.getLengthMm() / 2.0);
+            double cy = item.getYMm() + (item.getWidthMm() / 2.0);
+            double cz = item.getZMm() + (item.getHeightMm() / 2.0);
+
+            sumMass += mass;
+            sumMassX += (mass * cx);
+            sumMassY += (mass * cy);
+            sumMassZ += (mass * cz);
+        }
+
+        Double cogX = null;
+        Double cogY = null;
+        Double cogZ = null;
+        String loadBalanceStatus;
+
+        if (hasInvalidMassOrGeometry) {
+            loadBalanceStatus = "INVALID_DATA";
+        } else if (placements.isEmpty() || sumMass == 0.0) {
+            // Safe handling for empty layout or zero total mass without emitting NaN or Infinity:
+            // Geometric reference defaults to floor center
+            cogX = compartment != null ? compartment.getLengthMm() / 2.0 : 0.0;
+            cogY = compartment != null ? compartment.getWidthMm() / 2.0 : 0.0;
+            cogZ = 0.0;
+            loadBalanceStatus = "NOT_CONFIGURED";
+        } else {
+            cogX = sumMassX / sumMass;
+            cogY = sumMassY / sumMass;
+            cogZ = sumMassZ / sumMass;
+
+            if (Double.isNaN(cogX) || Double.isInfinite(cogX) ||
+                Double.isNaN(cogY) || Double.isInfinite(cogY) ||
+                Double.isNaN(cogZ) || Double.isInfinite(cogZ)) {
+                findings.add(new ValidationFindingDto(
+                        "CRITICAL", "NON_FINITE_COG",
+                        "Calculated Centre of Gravity resulted in non-finite coordinates: (" + cogX + ", " + cogY + ", " + cogZ + ")",
+                        List.of()
+                ));
+                loadBalanceStatus = "INVALID_DATA";
+            } else {
+                // Check if authoritative compartment CoG envelope limits are configured
+                boolean hasConfiguredLimits = false;
+                boolean outOfBounds = false;
+
+                if (compartment != null) {
+                    if (compartment.getMinCogXMm() != null && cogX < compartment.getMinCogXMm()) {
+                        outOfBounds = true;
+                        hasConfiguredLimits = true;
+                        findings.add(new ValidationFindingDto(
+                                "CRITICAL", "COG_OUT_OF_BOUNDS",
+                                "Longitudinal CoG (" + String.format("%.2f", cogX) + " mm) is forward of configured minimum boundary (" + compartment.getMinCogXMm() + " mm)",
+                                List.of()
+                        ));
+                    }
+                    if (compartment.getMaxCogXMm() != null && cogX > compartment.getMaxCogXMm()) {
+                        outOfBounds = true;
+                        hasConfiguredLimits = true;
+                        findings.add(new ValidationFindingDto(
+                                "CRITICAL", "COG_OUT_OF_BOUNDS",
+                                "Longitudinal CoG (" + String.format("%.2f", cogX) + " mm) is rear of configured maximum boundary (" + compartment.getMaxCogXMm() + " mm)",
+                                List.of()
+                        ));
+                    }
+                    if (compartment.getMinCogYMm() != null && cogY < compartment.getMinCogYMm()) {
+                        outOfBounds = true;
+                        hasConfiguredLimits = true;
+                        findings.add(new ValidationFindingDto(
+                                "CRITICAL", "COG_OUT_OF_BOUNDS",
+                                "Lateral CoG (" + String.format("%.2f", cogY) + " mm) is left of configured minimum boundary (" + compartment.getMinCogYMm() + " mm)",
+                                List.of()
+                        ));
+                    }
+                    if (compartment.getMaxCogYMm() != null && cogY > compartment.getMaxCogYMm()) {
+                        outOfBounds = true;
+                        hasConfiguredLimits = true;
+                        findings.add(new ValidationFindingDto(
+                                "CRITICAL", "COG_OUT_OF_BOUNDS",
+                                "Lateral CoG (" + String.format("%.2f", cogY) + " mm) is right of configured maximum boundary (" + compartment.getMaxCogYMm() + " mm)",
+                                List.of()
+                        ));
+                    }
+                    if (compartment.getMinCogZMm() != null && cogZ < compartment.getMinCogZMm()) {
+                        outOfBounds = true;
+                        hasConfiguredLimits = true;
+                        findings.add(new ValidationFindingDto(
+                                "CRITICAL", "COG_OUT_OF_BOUNDS",
+                                "Vertical CoG (" + String.format("%.2f", cogZ) + " mm) is below configured minimum boundary (" + compartment.getMinCogZMm() + " mm)",
+                                List.of()
+                        ));
+                    }
+                    if (compartment.getMaxCogZMm() != null && cogZ > compartment.getMaxCogZMm()) {
+                        outOfBounds = true;
+                        hasConfiguredLimits = true;
+                        findings.add(new ValidationFindingDto(
+                                "CRITICAL", "COG_OUT_OF_BOUNDS",
+                                "Vertical CoG (" + String.format("%.2f", cogZ) + " mm) exceeds configured maximum boundary (" + compartment.getMaxCogZMm() + " mm)",
+                                List.of()
+                        ));
+                    }
+
+                    if (!hasConfiguredLimits) {
+                        hasConfiguredLimits = (compartment.getMinCogXMm() != null || compartment.getMaxCogXMm() != null ||
+                                               compartment.getMinCogYMm() != null || compartment.getMaxCogYMm() != null ||
+                                               compartment.getMinCogZMm() != null || compartment.getMaxCogZMm() != null);
+                    }
+                }
+
+                if (outOfBounds) {
+                    loadBalanceStatus = "OUT_OF_BOUNDS";
+                } else if (hasConfiguredLimits) {
+                    loadBalanceStatus = "BALANCED";
+                } else {
+                    // Do not claim regulatory or physical compliance when limits are not configured.
+                    loadBalanceStatus = "NOT_CONFIGURED";
+                }
+            }
+        }
+
         boolean passed = findings.isEmpty();
-        return new ValidationResultDto(
+        ValidationResultDto result = new ValidationResultDto(
                 UUID.randomUUID().toString(),
                 passed,
                 VALIDATOR_VERSION,
                 ruleSnapshot != null && ruleSnapshot.getRules() != null ? ruleSnapshot.getRules().size() : 0,
                 findings
         );
+        result.setCogXMm(cogX);
+        result.setCogYMm(cogY);
+        result.setCogZMm(cogZ);
+        result.setTotalMassKg(sumMass);
+        result.setLoadBalanceStatus(loadBalanceStatus);
+        return result;
     }
 
     private double calculateEuclideanDistance(ItemPlacementDto a, ItemPlacementDto b) {

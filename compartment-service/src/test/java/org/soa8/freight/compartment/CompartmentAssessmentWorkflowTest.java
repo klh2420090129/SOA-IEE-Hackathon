@@ -409,4 +409,137 @@ class CompartmentAssessmentWorkflowTest {
         )).isInstanceOf(IllegalStateException.class)
           .hasMessageContaining("Assessment cannot be approved in current state: CANDIDATE_READY");
     }
+
+    @Autowired
+    private org.soa8.freight.compartment.repository.AssessmentDecisionAuditRepository decisionAuditRepository;
+
+    @Test
+    void shouldCreateAppendOnlyAuditEntryAndOutboxEventOnApproval() {
+        CompartmentDto comp = new CompartmentDto("comp-audit-app", "Standard Trailer", 12000, 2400, 2600, 25000);
+        AssessmentEntity assessment = workflowService.createAssessment("decl-audit-app", 1, "snap-audit-app", comp);
+
+        ItemPlacementDto item = new ItemPlacementDto("pl-audit-1", "item-1", 1, "3", "UN1203", 0, 0, 0, 1000, 1000, 1000, 500, "DEFAULT", false, 0.0);
+        CandidateLayoutDto candidate = new CandidateLayoutDto(
+                "layout-audit-1", 1, "comp-audit-app", null, "FEASIBLE", "HEURISTIC_EP_3D_V1", List.of(item)
+        );
+        AssessmentEntity ready = workflowService.recordCandidateLayout(assessment.getId(), candidate);
+        String realDigest = ready.getCandidateContentDigest();
+
+        ValidationResultDto valPassed = new ValidationResultDto("val-audit-1", true, "1.0.0", 1, Collections.emptyList());
+        valPassed.setCandidateLayoutId("layout-audit-1");
+        valPassed.setCandidateLayoutVersion(1);
+        valPassed.setCandidateContentDigest(realDigest);
+        valPassed.setRuleSnapshotId("snap-audit-app");
+        org.mockito.Mockito.when(validationClient.getValidationRun("val-audit-1")).thenReturn(java.util.Optional.of(valPassed));
+
+        workflowService.recordValidationOutcome(assessment.getId(), valPassed);
+
+        // Approve Candidate
+        AssessmentEntity approved = workflowService.approveCandidate(
+                assessment.getId(), 1, realDigest, "planner-audit-001", "Verified and approved by planner"
+        );
+        assertThat(approved.getWorkflowStatus()).isEqualTo("APPROVED");
+
+        // Verify Append-Only Audit Entry
+        List<org.soa8.freight.compartment.model.AssessmentDecisionAuditEntity> auditTrail =
+                decisionAuditRepository.findByAssessmentIdOrderByDecidedAtAsc(assessment.getId());
+        assertThat(auditTrail).hasSize(1);
+        org.soa8.freight.compartment.model.AssessmentDecisionAuditEntity audit = auditTrail.get(0);
+        assertThat(audit.getDecision()).isEqualTo("APPROVED");
+        assertThat(audit.getDecidedBy()).isEqualTo("planner-audit-001");
+        assertThat(audit.getNotes()).isEqualTo("Verified and approved by planner");
+        assertThat(audit.getLayoutVersion()).isEqualTo(1);
+        assertThat(audit.getLayoutDigest()).isEqualTo(realDigest);
+        assertThat(audit.getValidationId()).isEqualTo("val-audit-1");
+        assertThat(audit.getDecidedAt()).isNotNull();
+        assertThat(audit.getCorrelationId()).isNotBlank();
+
+        // Verify CargoLoadApproved outbox event
+        List<OutboxEventEntity> outbox = outboxEventRepository.findByStatusOrderByCreatedAtAsc("PENDING");
+        OutboxEventEntity approvedEvent = outbox.stream()
+                .filter(e -> "CargoLoadApproved".equals(e.getEventType()) && assessment.getId().equals(e.getAggregateId()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("CargoLoadApproved outbox event missing"));
+        assertThat(approvedEvent.getPayloadJson()).contains("planner-audit-001");
+        assertThat(approvedEvent.getPayloadJson()).contains("Verified and approved by planner");
+    }
+
+    @Test
+    void shouldCreateAppendOnlyAuditEntryOnRejection() {
+        CompartmentDto comp = new CompartmentDto("comp-audit-rej", "Standard Trailer", 12000, 2400, 2600, 25000);
+        AssessmentEntity assessment = workflowService.createAssessment("decl-audit-rej", 1, "snap-audit-rej", comp);
+
+        ItemPlacementDto item = new ItemPlacementDto("pl-audit-2", "item-2", 1, "3", "UN1203", 0, 0, 0, 1000, 1000, 1000, 500, "DEFAULT", false, 0.0);
+        CandidateLayoutDto candidate = new CandidateLayoutDto(
+                "layout-audit-2", 1, "comp-audit-rej", null, "FEASIBLE", "HEURISTIC_EP_3D_V1", List.of(item)
+        );
+        workflowService.recordCandidateLayout(assessment.getId(), candidate);
+
+        // Reject Candidate
+        AssessmentEntity rejected = workflowService.rejectCandidate(
+                assessment.getId(), 1, "planner-audit-002", "INSPECTION_FAILURE", "Damaged packaging detected"
+        );
+        assertThat(rejected.getWorkflowStatus()).isEqualTo("REJECTED");
+
+        // Verify Append-Only Audit Entry
+        List<org.soa8.freight.compartment.model.AssessmentDecisionAuditEntity> auditTrail =
+                decisionAuditRepository.findByAssessmentIdOrderByDecidedAtAsc(assessment.getId());
+        assertThat(auditTrail).hasSize(1);
+        org.soa8.freight.compartment.model.AssessmentDecisionAuditEntity audit = auditTrail.get(0);
+        assertThat(audit.getDecision()).isEqualTo("REJECTED");
+        assertThat(audit.getDecidedBy()).isEqualTo("planner-audit-002");
+        assertThat(audit.getReasonCode()).isEqualTo("INSPECTION_FAILURE");
+        assertThat(audit.getNotes()).isEqualTo("Damaged packaging detected");
+
+        // Verify CargoLoadRejected outbox event
+        List<OutboxEventEntity> outbox = outboxEventRepository.findByStatusOrderByCreatedAtAsc("PENDING");
+        OutboxEventEntity rejectedEvent = outbox.stream()
+                .filter(e -> "CargoLoadRejected".equals(e.getEventType()) && assessment.getId().equals(e.getAggregateId()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("CargoLoadRejected outbox event missing"));
+        assertThat(rejectedEvent.getPayloadJson()).contains("INSPECTION_FAILURE");
+    }
+
+    @Test
+    void shouldNotCreateAuditRecordOnFailedOrRejectedApprovalAttempts() {
+        CompartmentDto comp = new CompartmentDto("comp-audit-fail", "Standard Trailer", 12000, 2400, 2600, 25000);
+        AssessmentEntity assessment = workflowService.createAssessment("decl-audit-fail", 1, "snap-audit-fail", comp);
+
+        // Attempt approve in DRAFT state -> fails
+        assertThatThrownBy(() -> workflowService.approveCandidate(
+                assessment.getId(), 1, "digest-dummy", "planner-rogue", "illegal attempt"
+        )).isInstanceOf(IllegalStateException.class);
+
+        // Verify zero audit records created for failed attempt
+        List<org.soa8.freight.compartment.model.AssessmentDecisionAuditEntity> auditTrail =
+                decisionAuditRepository.findByAssessmentIdOrderByDecidedAtAsc(assessment.getId());
+        assertThat(auditTrail).isEmpty();
+    }
+
+    @Test
+    void shouldNotAllowRejectionWhenAlreadyInTerminalState() {
+        CompartmentDto comp = new CompartmentDto("comp-term", "Standard Trailer", 12000, 2400, 2600, 25000);
+        AssessmentEntity assessment = workflowService.createAssessment("decl-term", 1, "snap-term", comp);
+
+        ItemPlacementDto item = new ItemPlacementDto("pl-term", "item-1", 1, "3", "UN1203", 0, 0, 0, 1000, 1000, 1000, 500, "DEFAULT", false, 0.0);
+        CandidateLayoutDto candidate = new CandidateLayoutDto(
+                "layout-term", 1, "comp-term", null, "FEASIBLE", "HEURISTIC_EP_3D_V1", List.of(item)
+        );
+        workflowService.recordCandidateLayout(assessment.getId(), candidate);
+
+        // Reject Candidate once
+        workflowService.rejectCandidate(assessment.getId(), 1, "planner-1", "REASON_1", "Initial rejection");
+
+        // Attempt second rejection on already REJECTED assessment -> must fail closed
+        assertThatThrownBy(() -> workflowService.rejectCandidate(
+                assessment.getId(), 1, "planner-1", "REASON_2", "Duplicate rejection"
+        )).isInstanceOf(IllegalStateException.class)
+          .hasMessageContaining("already in terminal state [REJECTED]");
+
+        // Verify only 1 audit entry exists
+        List<org.soa8.freight.compartment.model.AssessmentDecisionAuditEntity> auditTrail =
+                decisionAuditRepository.findByAssessmentIdOrderByDecidedAtAsc(assessment.getId());
+        assertThat(auditTrail).hasSize(1);
+        assertThat(auditTrail.get(0).getReasonCode()).isEqualTo("REASON_1");
+    }
 }

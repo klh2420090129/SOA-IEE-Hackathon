@@ -15,6 +15,7 @@ import { useAuth } from '../context/AuthContext';
 import { BulkCargoImportModal } from '../components/declaration/BulkCargoImportModal';
 import { SaveTemplateModal } from '../components/declaration/SaveTemplateModal';
 import { SavedCargoTemplatesModal } from '../components/declaration/SavedCargoTemplatesModal';
+import { DeclarationDiscoveryModal } from '../components/declaration/DeclarationDiscoveryModal';
 
 export const ShipperPortalPage: React.FC = () => {
   const { user } = useAuth();
@@ -62,6 +63,7 @@ export const ShipperPortalPage: React.FC = () => {
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isSaveTemplateModalOpen, setIsSaveTemplateModalOpen] = useState(false);
   const [isSavedTemplatesModalOpen, setIsSavedTemplatesModalOpen] = useState(false);
+  const [isDiscoveryModalOpen, setIsDiscoveryModalOpen] = useState(false);
 
   const handleImportItems = (importedItems: CargoItemInput[], replaceExisting: boolean) => {
     if (replaceExisting) {
@@ -161,14 +163,34 @@ export const ShipperPortalPage: React.FC = () => {
           </p>
         </div>
 
-        {/* Existing Declaration Lookup */}
+        {/* Existing Declaration Lookup & Browse Ribbon */}
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <button
+            onClick={() => setIsDiscoveryModalOpen(true)}
+            data-testid="open-shipper-discovery-btn"
+            style={{
+              padding: '8px 14px',
+              background: 'rgba(59, 130, 246, 0.15)',
+              color: '#60a5fa',
+              border: '1px solid rgba(59, 130, 246, 0.3)',
+              borderRadius: '6px',
+              fontSize: '0.85rem',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              cursor: 'pointer',
+              fontWeight: 600
+            }}
+          >
+            <FileText size={14} />
+            Browse Consignments
+          </button>
           <input
             type="text"
             placeholder="Retrieve Declaration ID..."
             value={searchId}
             onChange={(e) => setSearchId(e.target.value)}
-            style={{ width: '280px', fontSize: '0.85rem' }}
+            style={{ width: '240px', fontSize: '0.85rem' }}
           />
           <button
             onClick={handleLookup}
@@ -182,7 +204,8 @@ export const ShipperPortalPage: React.FC = () => {
               fontSize: '0.85rem',
               display: 'flex',
               alignItems: 'center',
-              gap: '6px'
+              gap: '6px',
+              cursor: 'pointer'
             }}
           >
             <Search size={14} />
@@ -551,6 +574,25 @@ export const ShipperPortalPage: React.FC = () => {
         onClose={() => setIsSavedTemplatesModalOpen(false)}
         onLoadTemplate={handleLoadTemplate}
         existingItemCount={items.length}
+      />
+
+      {/* Consignment Discovery Modal */}
+      <DeclarationDiscoveryModal
+        isOpen={isDiscoveryModalOpen}
+        onClose={() => setIsDiscoveryModalOpen(false)}
+        onSelectDeclaration={async (decl) => {
+          setActiveDeclaration(decl);
+          setSearchId(decl.id);
+          try {
+            const proj = await declarationApi.getWorkflowProjection(decl.id);
+            setWorkflowProjection(proj);
+          } catch {
+            setWorkflowProjection(null);
+          }
+        }}
+        title="My Consignment Declarations"
+        roleDescription="Browse and select declarations registered under your shipper profile"
+        isPlanner={false}
       />
     </div>
   );

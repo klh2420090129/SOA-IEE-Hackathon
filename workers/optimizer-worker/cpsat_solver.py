@@ -41,7 +41,7 @@ SUPPORTED_ALGORITHMS = {
 WEIGHT_PER_PLACED_UNIT = 10_000_000
 MAX_VOLUME_BONUS_PER_UNIT = 100_000
 
-def compute_standard_layout_evaluation(placements: List[Dict[str, Any]]) -> Dict[str, Any]:
+def compute_standard_layout_evaluation(placements: List[Dict[str, Any]], compartment: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     Computes standard, consistent evaluation metrics across any layout candidate:
     1. unitsPlaced: Count of placed handling units (Primary lexicographic objective)
@@ -49,6 +49,11 @@ def compute_standard_layout_evaluation(placements: List[Dict[str, Any]]) -> Dict
     3. compactnessScore: Sum of positional coordinates (lower is more compact/near front-floor)
     4. scalarObjective: Mathematically sound unified scalar value:
        Sum(placed * 10,000,000 + volume_dm3) - Sum(z * 100 + x * 2 + y)
+    5. Centre of Gravity (CoG):
+       CoG_x = sum(m_i * x_i) / sum(m_i)
+       CoG_y = sum(m_i * y_i) / sum(m_i)
+       CoG_z = sum(m_i * z_i) / sum(m_i)
+       with safe zero/missing mass handling and loadBalanceStatus.
     """
     n_placed = len(placements)
     total_vol_mm3 = sum(p["lengthMm"] * p["widthMm"] * p["heightMm"] for p in placements)
@@ -62,12 +67,92 @@ def compute_standard_layout_evaluation(placements: List[Dict[str, Any]]) -> Dict
     vol_terms = sum(int((p["lengthMm"] * p["widthMm"] * p["heightMm"]) // 1_000_000) for p in placements)
     scalar_obj = (n_placed * WEIGHT_PER_PLACED_UNIT) + vol_terms - pos_penalty
 
+    # Independent CoG Calculation
+    sum_mass = 0.0
+    sum_mass_x = 0.0
+    sum_mass_y = 0.0
+    sum_mass_z = 0.0
+    has_invalid_mass_or_geom = False
+
+    for p in placements:
+        m = p.get("weightKg", 0.0)
+        if m is None or math.isnan(m) or math.isinf(m) or m < 0.0:
+            has_invalid_mass_or_geom = True
+            break
+        # Package center coordinates:
+        cx = p["xMm"] + (p["lengthMm"] / 2.0)
+        cy = p["yMm"] + (p["widthMm"] / 2.0)
+        cz = p["zMm"] + (p["heightMm"] / 2.0)
+        if any(math.isnan(v) or math.isinf(v) for v in (cx, cy, cz)):
+            has_invalid_mass_or_geom = True
+            break
+        sum_mass += m
+        sum_mass_x += (m * cx)
+        sum_mass_y += (m * cy)
+        sum_mass_z += (m * cz)
+
+    if has_invalid_mass_or_geom:
+        cog_x, cog_y, cog_z = None, None, None
+        load_balance_status = "INVALID_DATA"
+    elif not placements or sum_mass == 0.0:
+        comp_l = compartment.get("lengthMm", 0.0) if compartment else 0.0
+        comp_w = compartment.get("widthMm", 0.0) if compartment else 0.0
+        cog_x = round(comp_l / 2.0, 2)
+        cog_y = round(comp_w / 2.0, 2)
+        cog_z = 0.0
+        load_balance_status = "NOT_CONFIGURED"
+    else:
+        cog_x = round(sum_mass_x / sum_mass, 2)
+        cog_y = round(sum_mass_y / sum_mass, 2)
+        cog_z = round(sum_mass_z / sum_mass, 2)
+
+        # Check configured bounds if provided
+        has_limits = False
+        out_of_bounds = False
+        if compartment:
+            min_x = compartment.get("minCogXMm")
+            max_x = compartment.get("maxCogXMm")
+            min_y = compartment.get("minCogYMm")
+            max_y = compartment.get("maxCogYMm")
+            min_z = compartment.get("minCogZMm")
+            max_z = compartment.get("maxCogZMm")
+
+            if min_x is not None:
+                has_limits = True
+                if cog_x < min_x: out_of_bounds = True
+            if max_x is not None:
+                has_limits = True
+                if cog_x > max_x: out_of_bounds = True
+            if min_y is not None:
+                has_limits = True
+                if cog_y < min_y: out_of_bounds = True
+            if max_y is not None:
+                has_limits = True
+                if cog_y > max_y: out_of_bounds = True
+            if min_z is not None:
+                has_limits = True
+                if cog_z < min_z: out_of_bounds = True
+            if max_z is not None:
+                has_limits = True
+                if cog_z > max_z: out_of_bounds = True
+
+        if out_of_bounds:
+            load_balance_status = "OUT_OF_BOUNDS"
+        elif has_limits:
+            load_balance_status = "BALANCED"
+        else:
+            load_balance_status = "NOT_CONFIGURED"
+
     return {
         "unitsPlaced": n_placed,
         "totalVolumeM3": total_vol_m3,
         "totalWeightKg": round(total_weight_kg, 2),
         "positionPenalty": pos_penalty,
-        "scalarObjective": scalar_obj
+        "scalarObjective": scalar_obj,
+        "cogXMm": cog_x,
+        "cogYMm": cog_y,
+        "cogZMm": cog_z,
+        "loadBalanceStatus": load_balance_status
     }
 
 def validate_candidate_strictly(placements: List[Dict[str, Any]],
@@ -81,13 +166,29 @@ def validate_candidate_strictly(placements: List[Dict[str, Any]],
     comp_h = int(compartment.get("heightMm", 0))
     max_payload = float(compartment.get("maxPayloadKg", 0.0))
 
-    total_weight = sum(p["weightKg"] for p in placements)
-    if total_weight > max_payload:
-        return False, f"Payload capacity exceeded: {total_weight} > {max_payload}"
+    total_weight = 0.0
+    sum_mass_x = 0.0
+    sum_mass_y = 0.0
+    sum_mass_z = 0.0
 
     for i, p in enumerate(placements):
         x, y, z = p["xMm"], p["yMm"], p["zMm"]
         l, w, h = p["lengthMm"], p["widthMm"], p["heightMm"]
+        mass = p.get("weightKg", 0.0)
+
+        if mass is None or math.isnan(mass) or math.isinf(mass) or mass < 0:
+            return False, f"Invalid mass data on item {p.get('cargoItemId')}: {mass}"
+
+        if any(math.isnan(v) or math.isinf(v) for v in (x, y, z, l, w, h)):
+            return False, f"Non-finite coordinates or dimensions on item {p.get('cargoItemId')}"
+
+        total_weight += mass
+        cx = x + (l / 2.0)
+        cy = y + (w / 2.0)
+        cz = z + (h / 2.0)
+        sum_mass_x += mass * cx
+        sum_mass_y += mass * cy
+        sum_mass_z += mass * cz
 
         if x < 0 or y < 0 or z < 0 or (x + l) > comp_l or (y + w) > comp_w or (z + h) > comp_h:
             return False, f"Placement out of bounds: item {p['cargoItemId']}"
@@ -123,6 +224,35 @@ def validate_candidate_strictly(placements: List[Dict[str, Any]],
         is_ok, code, desc = check_segregation(x, y, z, l, w, h, p["hazardClass"], placements[:i] + placements[i+1:], active_rules)
         if not is_ok:
             return False, f"Segregation violation: {code} - {desc}"
+
+    if total_weight > max_payload:
+        return False, f"Payload capacity exceeded: {total_weight} > {max_payload}"
+
+    # Check configured CoG bounds if authoritative configuration is present
+    if total_weight > 0.0:
+        cog_x = sum_mass_x / total_weight
+        cog_y = sum_mass_y / total_weight
+        cog_z = sum_mass_z / total_weight
+
+        min_x = compartment.get("minCogXMm")
+        max_x = compartment.get("maxCogXMm")
+        min_y = compartment.get("minCogYMm")
+        max_y = compartment.get("maxCogYMm")
+        min_z = compartment.get("minCogZMm")
+        max_z = compartment.get("maxCogZMm")
+
+        if min_x is not None and cog_x < min_x:
+            return False, f"Longitudinal CoG ({cog_x:.2f} mm) is forward of configured minimum boundary ({min_x} mm)"
+        if max_x is not None and cog_x > max_x:
+            return False, f"Longitudinal CoG ({cog_x:.2f} mm) is rear of configured maximum boundary ({max_x} mm)"
+        if min_y is not None and cog_y < min_y:
+            return False, f"Lateral CoG ({cog_y:.2f} mm) is left of configured minimum boundary ({min_y} mm)"
+        if max_y is not None and cog_y > max_y:
+            return False, f"Lateral CoG ({cog_y:.2f} mm) is right of configured maximum boundary ({max_y} mm)"
+        if min_z is not None and cog_z < min_z:
+            return False, f"Vertical CoG ({cog_z:.2f} mm) is below configured minimum boundary ({min_z} mm)"
+        if max_z is not None and cog_z > max_z:
+            return False, f"Vertical CoG ({cog_z:.2f} mm) exceeds configured maximum boundary ({max_z} mm)"
 
     return True, None
 
@@ -557,7 +687,7 @@ def solve_cpsat_cargo(command: Dict[str, Any],
                     solver_status_name = "UNKNOWN"
 
                 content_digest = compute_content_digest(cp_placements)
-                layout_eval = compute_standard_layout_evaluation(cp_placements)
+                layout_eval = compute_standard_layout_evaluation(cp_placements, compartment)
                 return {
                     "resultId": f"res-{job_id}-{attempt_id}",
                     "jobId": job_id,

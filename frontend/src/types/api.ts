@@ -65,6 +65,23 @@ export interface DeclarationWorkflowProjection {
   updatedAt?: string | null;
 }
 
+export interface PaginatedResponse<T> {
+  content: T[];
+  page: number;
+  size: number;
+  totalElements: number;
+  totalPages: number;
+  first: boolean;
+  last: boolean;
+}
+
+export interface DeclarationQueryParams {
+  page?: number;
+  size?: number;
+  status?: string;
+  shipperId?: string;
+}
+
 // Cargo Template types
 export interface CargoTemplateItem extends CargoItemInput {
   id?: string;
@@ -100,6 +117,12 @@ export interface CompartmentDto {
   widthMm: number;
   heightMm: number;
   maxPayloadKg: number;
+  minCogXMm?: number;
+  maxCogXMm?: number;
+  minCogYMm?: number;
+  maxCogYMm?: number;
+  minCogZMm?: number;
+  maxCogZMm?: number;
 }
 
 export interface CreateAssessmentRequest {
@@ -261,6 +284,11 @@ export interface ValidationResultDto {
   candidateContentDigest?: string;
   ruleSnapshotId?: string;
   ruleSnapshotDigest?: string;
+  cogXMm?: number;
+  cogYMm?: number;
+  cogZMm?: number;
+  totalMassKg?: number;
+  loadBalanceStatus?: 'NOT_CONFIGURED' | 'BALANCED' | 'OUT_OF_BOUNDS' | 'INVALID_DATA';
 }
 
 export interface RunValidationRequest {

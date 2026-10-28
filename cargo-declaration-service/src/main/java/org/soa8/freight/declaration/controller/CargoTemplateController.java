@@ -34,7 +34,8 @@ public class CargoTemplateController {
             "9"
     );
 
-    public CargoTemplateController(CargoTemplateRepository templateRepository, TokenValidator tokenValidator) {
+    public CargoTemplateController(CargoTemplateRepository templateRepository,
+                                   @org.springframework.beans.factory.annotation.Qualifier("declarationTokenValidator") TokenValidator tokenValidator) {
         this.templateRepository = templateRepository;
         this.tokenValidator = tokenValidator;
     }

@@ -24,17 +24,20 @@ public class CompartmentController {
     private final AssessmentRepository assessmentRepository;
     private final CandidateLayoutRepository layoutRepository;
     private final OutboxEventRepository outboxEventRepository;
+    private final org.soa8.freight.compartment.repository.AssessmentDecisionAuditRepository decisionAuditRepository;
     private final AssessmentWorkflowService workflowService;
     private final TokenValidator tokenValidator;
 
     public CompartmentController(AssessmentRepository assessmentRepository,
                                  CandidateLayoutRepository layoutRepository,
                                  OutboxEventRepository outboxEventRepository,
+                                 org.soa8.freight.compartment.repository.AssessmentDecisionAuditRepository decisionAuditRepository,
                                  AssessmentWorkflowService workflowService,
-                                 TokenValidator tokenValidator) {
+                                 @org.springframework.beans.factory.annotation.Qualifier("compartmentTokenValidator") TokenValidator tokenValidator) {
         this.assessmentRepository = assessmentRepository;
         this.layoutRepository = layoutRepository;
         this.outboxEventRepository = outboxEventRepository;
+        this.decisionAuditRepository = decisionAuditRepository;
         this.workflowService = workflowService;
         this.tokenValidator = tokenValidator;
     }
@@ -129,7 +132,8 @@ public class CompartmentController {
         }
 
         try {
-            String plannerId = req.plannerId != null ? req.plannerId : claims.getSubject();
+            // Strictly take authenticated actor identity from validated token claims
+            String plannerId = claims.getSubject();
             AssessmentEntity updated = workflowService.approveCandidate(
                     id, req.layoutVersion, req.expectedDigest,
                     plannerId,
@@ -168,7 +172,8 @@ public class CompartmentController {
         }
 
         try {
-            String plannerId = req.plannerId != null ? req.plannerId : claims.getSubject();
+            // Strictly take authenticated actor identity from validated token claims
+            String plannerId = claims.getSubject();
             AssessmentEntity updated = workflowService.rejectCandidate(
                     id, req.layoutVersion,
                     plannerId,
@@ -176,9 +181,61 @@ public class CompartmentController {
                     req.notes
             );
             return ResponseEntity.ok(updated);
+        } catch (IllegalStateException e) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                    "code", "REJECTION_BLOCKED",
+                    "message", e.getMessage()
+            ));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("code", "NOT_FOUND", "message", e.getMessage()));
         }
+    }
+
+    @GetMapping("/assessments/{id}/audit-trail")
+    public ResponseEntity<?> getAssessmentAuditTrail(@PathVariable("id") String id,
+                                                     @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        Claims claims;
+        try {
+            claims = tokenValidator.validateToken(authHeader);
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of(
+                    "code", "UNAUTHORIZED",
+                    "message", "Valid bearer token required: " + e.getMessage()
+            ));
+        }
+
+        AssessmentEntity assessment = assessmentRepository.findById(id).orElse(null);
+        if (assessment == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
+                    "code", "NOT_FOUND",
+                    "message", "Assessment not found: " + id
+            ));
+        }
+
+        // Planners can view any assessment audit trail
+        // Shippers can only view audit trail if the assessment belongs to a declaration they own
+        if (!tokenValidator.hasRole(claims, "ROLE_LOAD_PLANNER")) {
+            if (tokenValidator.hasRole(claims, "ROLE_SHIPPER")) {
+                String authenticatedShipper = claims.getSubject();
+                // Check if the declaration's shipperId matches authenticated user
+                // The declarationId in assessment can be checked, or if declarationId contains the shipper prefix
+                // For secure defense-in-depth, if the shipper does not own this declaration, deny access
+                if (!assessment.getDeclarationId().startsWith(authenticatedShipper)
+                        && !authenticatedShipper.equals(assessment.getDeclarationId())) {
+                    return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
+                            "code", "FORBIDDEN",
+                            "message", "Cross-tenant access forbidden: you cannot access another shipper's assessment audit trail"
+                    ));
+                }
+            } else {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
+                        "code", "FORBIDDEN",
+                        "message", "Insufficient privileges to access assessment audit trail"
+                ));
+            }
+        }
+
+        return ResponseEntity.ok(decisionAuditRepository.findByAssessmentIdOrderByDecidedAtAsc(id));
     }
 
     @GetMapping("/assessments/{id}/events")

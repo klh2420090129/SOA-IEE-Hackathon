@@ -31,8 +31,10 @@ public class OutboxPublisherService {
         List<OutboxEventEntity> pendingEvents = outboxEventRepository.findByStatusOrderByCreatedAtAsc("PENDING");
         for (OutboxEventEntity event : pendingEvents) {
             try {
-                // Keyed by aggregateId to preserve partition order
-                kafkaTemplate.send(event.getTopic(), event.getAggregateId(), event.getPayloadJson());
+                // Keyed by aggregateId to preserve partition order.
+                // Wait for broker acknowledgement future to guarantee message was accepted by broker before marking PUBLISHED
+                java.util.concurrent.CompletableFuture<?> sendFuture = kafkaTemplate.send(event.getTopic(), event.getAggregateId(), event.getPayloadJson());
+                sendFuture.get(5, java.util.concurrent.TimeUnit.SECONDS);
                 event.setStatus("PUBLISHED");
                 event.setPublishedAt(Instant.now());
                 outboxEventRepository.save(event);

@@ -10,7 +10,7 @@ import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 
-@Component
+@Component("declarationTokenValidator")
 public class TokenValidator {
 
     private final SecretKey key;

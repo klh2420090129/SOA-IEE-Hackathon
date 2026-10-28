@@ -7,6 +7,14 @@ public class CompartmentDto {
     private int widthMm;
     private int heightMm;
     private double maxPayloadKg;
+    // Optional authoritative Centre of Gravity (CoG) bounding limits in millimetres.
+    // If null, CoG is evaluated as informational without asserting compliance against unconfigured limits.
+    private Double minCogXMm;
+    private Double maxCogXMm;
+    private Double minCogYMm;
+    private Double maxCogYMm;
+    private Double minCogZMm;
+    private Double maxCogZMm;
 
     public CompartmentDto() {
     }
@@ -37,4 +45,22 @@ public class CompartmentDto {
 
     public double getMaxPayloadKg() { return maxPayloadKg; }
     public void setMaxPayloadKg(double maxPayloadKg) { this.maxPayloadKg = maxPayloadKg; }
+
+    public Double getMinCogXMm() { return minCogXMm; }
+    public void setMinCogXMm(Double minCogXMm) { this.minCogXMm = minCogXMm; }
+
+    public Double getMaxCogXMm() { return maxCogXMm; }
+    public void setMaxCogXMm(Double maxCogXMm) { this.maxCogXMm = maxCogXMm; }
+
+    public Double getMinCogYMm() { return minCogYMm; }
+    public void setMinCogYMm(Double minCogYMm) { this.minCogYMm = minCogYMm; }
+
+    public Double getMaxCogYMm() { return maxCogYMm; }
+    public void setMaxCogYMm(Double maxCogYMm) { this.maxCogYMm = maxCogYMm; }
+
+    public Double getMinCogZMm() { return minCogZMm; }
+    public void setMinCogZMm(Double minCogZMm) { this.minCogZMm = minCogZMm; }
+
+    public Double getMaxCogZMm() { return maxCogZMm; }
+    public void setMaxCogZMm(Double maxCogZMm) { this.maxCogZMm = maxCogZMm; }
 }

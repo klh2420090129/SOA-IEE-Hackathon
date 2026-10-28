@@ -412,6 +412,11 @@ def solve_3d_packing(command: Dict[str, Any]) -> Dict[str, Any]:
 
     content_digest = compute_content_digest(placed_items)
 
+    # Compute standard layout evaluation (CoG, volume, compactness, load balance)
+    # matching CP-SAT and IndependentValidator semantics
+    from cpsat_solver import compute_standard_layout_evaluation
+    layout_eval = compute_standard_layout_evaluation(placed_items, compartment)
+
     diagnostics = {
         "engine": ALGORITHM_PROVENANCE,
         "version": ALGORITHM_VERSION,
@@ -443,6 +448,7 @@ def solve_3d_packing(command: Dict[str, Any]) -> Dict[str, Any]:
         "contentDigest": content_digest,
         "placements": placed_items,
         "unassignedItems": unassigned_items,
+        "evaluation": layout_eval,
         "diagnostics": diagnostics
     }
     return result

@@ -13,6 +13,11 @@ public class ValidationResultDto {
     private String candidateContentDigest;
     private String ruleSnapshotId;
     private String ruleSnapshotDigest;
+    private Double cogXMm;
+    private Double cogYMm;
+    private Double cogZMm;
+    private Double totalMassKg;
+    private String loadBalanceStatus; // "NOT_CONFIGURED", "BALANCED", "OUT_OF_BOUNDS", "INVALID_DATA"
 
     public ValidationResultDto() {
     }
@@ -54,4 +59,19 @@ public class ValidationResultDto {
 
     public String getRuleSnapshotDigest() { return ruleSnapshotDigest; }
     public void setRuleSnapshotDigest(String ruleSnapshotDigest) { this.ruleSnapshotDigest = ruleSnapshotDigest; }
+
+    public Double getCogXMm() { return cogXMm; }
+    public void setCogXMm(Double cogXMm) { this.cogXMm = cogXMm; }
+
+    public Double getCogYMm() { return cogYMm; }
+    public void setCogYMm(Double cogYMm) { this.cogYMm = cogYMm; }
+
+    public Double getCogZMm() { return cogZMm; }
+    public void setCogZMm(Double cogZMm) { this.cogZMm = cogZMm; }
+
+    public Double getTotalMassKg() { return totalMassKg; }
+    public void setTotalMassKg(Double totalMassKg) { this.totalMassKg = totalMassKg; }
+
+    public String getLoadBalanceStatus() { return loadBalanceStatus; }
+    public void setLoadBalanceStatus(String loadBalanceStatus) { this.loadBalanceStatus = loadBalanceStatus; }
 }

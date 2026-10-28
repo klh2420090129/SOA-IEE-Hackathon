@@ -28,6 +28,7 @@ import { CandidateViewer3D } from '../components/simulation/CandidateViewer3D';
 import { CanvasErrorBoundary } from '../components/common/CanvasErrorBoundary';
 import { useOptimizationJob } from '../hooks/useOptimizationJob';
 import { useAuth } from '../context/AuthContext';
+import { DeclarationDiscoveryModal } from '../components/declaration/DeclarationDiscoveryModal';
 
 export const PlannerReviewPage: React.FC = () => {
   const { user, hasRole } = useAuth();
@@ -39,6 +40,7 @@ export const PlannerReviewPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [actionMessage, setActionMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isDiscoveryOpen, setIsDiscoveryOpen] = useState(false);
 
   // Entities
   const [assessment, setAssessment] = useState<AssessmentEntity | null>(null);
@@ -330,13 +332,32 @@ export const PlannerReviewPage: React.FC = () => {
     <div style={{ maxWidth: '1240px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '20px' }}>
       {/* Session Management Bar */}
       <div className="glass-panel" style={{ padding: '16px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '14px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <button
+            onClick={() => setIsDiscoveryOpen(true)}
+            data-testid="open-planner-discovery-btn"
+            style={{
+              padding: '8px 14px',
+              background: 'rgba(59, 130, 246, 0.15)',
+              color: '#60a5fa',
+              border: '1px solid rgba(59, 130, 246, 0.3)',
+              borderRadius: '6px',
+              fontSize: '0.85rem',
+              fontWeight: 600,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              cursor: 'pointer'
+            }}
+          >
+            <Search size={14} /> Browse Declarations
+          </button>
           <input
             type="text"
             placeholder="Enter Declaration ID..."
             value={declarationIdInput}
             onChange={(e) => setDeclarationIdInput(e.target.value)}
-            style={{ width: '260px', fontSize: '0.85rem' }}
+            style={{ width: '220px', fontSize: '0.85rem' }}
           />
           <button
             onClick={handleCreateAssessmentFromDeclaration}
@@ -350,7 +371,8 @@ export const PlannerReviewPage: React.FC = () => {
               fontWeight: 600,
               display: 'flex',
               alignItems: 'center',
-              gap: '6px'
+              gap: '6px',
+              cursor: 'pointer'
             }}
           >
             <Play size={14} /> Start New Assessment
@@ -614,6 +636,46 @@ export const PlannerReviewPage: React.FC = () => {
             Validator Engine: {validationResult.validatorVersion} &bull; Rules Evaluated: {validationResult.evaluatedRulesCount} &bull; Candidate Digest: <code>{validationResult.candidateContentDigest?.slice(0, 24)}...</code>
           </div>
 
+          {/* Centre of Gravity (CoG) & Load-Balance Feasibility Status */}
+          {validationResult.cogXMm !== undefined && validationResult.cogXMm !== null && (
+            <div style={{
+              background: 'rgba(255, 255, 255, 0.03)',
+              border: '1px solid var(--border-color)',
+              borderRadius: '6px',
+              padding: '12px 14px',
+              marginBottom: '12px',
+              fontSize: '0.85rem'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                <span style={{ fontWeight: 600, color: 'var(--text-main)' }}>Centre of Gravity (CoG) & Load Balance</span>
+                <span className={`badge ${
+                  validationResult.loadBalanceStatus === 'BALANCED'
+                    ? 'badge-ready'
+                    : validationResult.loadBalanceStatus === 'OUT_OF_BOUNDS'
+                    ? 'badge-validation-failed'
+                    : 'badge-draft'
+                }`}>
+                  {validationResult.loadBalanceStatus === 'BALANCED'
+                    ? 'BALANCED (ENFORCED BOUNDS)'
+                    : validationResult.loadBalanceStatus === 'OUT_OF_BOUNDS'
+                    ? 'OUT OF BOUNDS'
+                    : 'NOT CONFIGURED (INFORMATIONAL)'}
+                </span>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                <div>CoG X (Longitudinal): <strong style={{ color: 'var(--text-main)' }}>{validationResult.cogXMm} mm</strong></div>
+                <div>CoG Y (Lateral): <strong style={{ color: 'var(--text-main)' }}>{validationResult.cogYMm} mm</strong></div>
+                <div>CoG Z (Elevation): <strong style={{ color: 'var(--text-main)' }}>{validationResult.cogZMm} mm</strong></div>
+                <div>Total Placed Mass: <strong style={{ color: 'var(--text-main)' }}>{validationResult.totalMassKg} kg</strong></div>
+              </div>
+              {validationResult.loadBalanceStatus === 'NOT_CONFIGURED' && (
+                <div style={{ marginTop: '8px', fontSize: '0.75rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                  Notice: Physical axle limits and compartment CoG envelopes are not configured. Calculated CoG is reported for engineering review; physical load-balance feasibility has not been established.
+                </div>
+              )}
+            </div>
+          )}
+
           {validationResult.findings.length === 0 ? (
             <div style={{
               background: 'rgba(16, 185, 129, 0.1)',
@@ -627,7 +689,7 @@ export const PlannerReviewPage: React.FC = () => {
               gap: '8px'
             }}>
               <CheckCircle2 size={16} />
-              <span>Compliant: AABB containment verified, no 3D geometric collisions, axle weight balanced, and IMDG segregation minimums satisfied.</span>
+              <span>Compliant: AABB containment verified, no 3D geometric collisions, support and stacking verified, and IMDG segregation minimums satisfied.</span>
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -718,6 +780,19 @@ export const PlannerReviewPage: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Cross-Tenant Declaration Discovery Modal */}
+      <DeclarationDiscoveryModal
+        isOpen={isDiscoveryOpen}
+        onClose={() => setIsDiscoveryOpen(false)}
+        onSelectDeclaration={(decl) => {
+          setDeclarationIdInput(decl.id);
+          setDeclaration(decl);
+        }}
+        title="Consignment Declarations Queue"
+        roleDescription="Browse cross-tenant declarations, filter by status, and queue for 3D optimization assessment"
+        isPlanner={true}
+      />
     </div>
   );
 };

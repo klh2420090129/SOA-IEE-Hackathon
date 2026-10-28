@@ -86,6 +86,9 @@ class EndToEndVerticalSliceIntegrationTest {
     private OutboxEventRepository outboxEventRepository;
 
     @Autowired
+    private org.soa8.freight.compartment.repository.AssessmentDecisionAuditRepository decisionAuditRepository;
+
+    @Autowired
     private DeclarationWorkflowService workflowService;
 
     @Autowired
@@ -171,11 +174,21 @@ class EndToEndVerticalSliceIntegrationTest {
         );
         assertThat(assessment.getWorkflowStatus()).isEqualTo("REJECTED");
 
+        // Verify Append-Only Decision Audit Entry written in compartment_db
+        List<org.soa8.freight.compartment.model.AssessmentDecisionAuditEntity> auditTrail =
+                decisionAuditRepository.findByAssessmentIdOrderByDecidedAtAsc(assessment.getId());
+        assertThat(auditTrail).hasSize(1);
+        org.soa8.freight.compartment.model.AssessmentDecisionAuditEntity auditEntry = auditTrail.get(0);
+        assertThat(auditEntry.getDecision()).isEqualTo("REJECTED");
+        assertThat(auditEntry.getDecidedBy()).isEqualTo("planner-001");
+        assertThat(auditEntry.getReasonCode()).isEqualTo("OPERATIONAL_REJECTION");
+        assertThat(auditEntry.getCorrelationId()).isNotBlank();
+
         // Step 9: Verify Transactional Outbox published CargoLoadRejected event
         List<OutboxEventEntity> outbox = outboxEventRepository.findByStatusOrderByCreatedAtAsc("PENDING");
         assertThat(outbox).isNotEmpty();
         OutboxEventEntity eventEntity = outbox.stream()
-                .filter(e -> assessmentId.equals(e.getAggregateId()))
+                .filter(e -> assessmentId.equals(e.getAggregateId()) && "CargoLoadRejected".equals(e.getEventType()))
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("Outbox event not found for assessment " + assessmentId));
         assertThat(eventEntity.getEventType()).isEqualTo("CargoLoadRejected");
@@ -197,6 +210,35 @@ class EndToEndVerticalSliceIntegrationTest {
         // Duplicate delivery (Kafka replay simulation)
         boolean processedDuplicate = workflowService.processCargoLoadRejected(event);
         assertThat(processedDuplicate).isFalse(); // Exactly once / idempotent behavior
+
+        // Step 11: Also verify CargoLoadApproved domain event handling and idempotency
+        org.soa8.freight.common.events.CargoLoadApprovedPayload approvedPayload =
+                new org.soa8.freight.common.events.CargoLoadApprovedPayload(
+                        assessmentId,
+                        event.getPayload().getDeclarationId(),
+                        1, 1, candidateDigest, "snap-001",
+                        validationResult.getValidationId(),
+                        "planner-001", "Approved after review"
+                );
+        DomainEvent<org.soa8.freight.common.events.CargoLoadApprovedPayload> approvedEvent =
+                new DomainEvent<>(
+                        EventTopics.EVENT_TYPE_CARGO_LOAD_APPROVED,
+                        assessmentId,
+                        "Assessment",
+                        EventTopics.SCHEMA_VERSION_1,
+                        java.util.UUID.randomUUID().toString(),
+                        approvedPayload
+                );
+
+        boolean processedApprovedFirst = workflowService.processCargoLoadApproved(approvedEvent);
+        assertThat(processedApprovedFirst).isTrue();
+
+        DeclarationWorkflowProjection approvedProjection = projectionRepository.findById(event.getPayload().getDeclarationId()).orElseThrow();
+        assertThat(approvedProjection.getWorkflowStatus()).isEqualTo("APPROVED");
+        assertThat(approvedProjection.getRejectionNotes()).isEqualTo("Approved after review");
+
+        boolean processedApprovedDuplicate = workflowService.processCargoLoadApproved(approvedEvent);
+        assertThat(processedApprovedDuplicate).isFalse(); // Idempotent check
     }
 
     @Test

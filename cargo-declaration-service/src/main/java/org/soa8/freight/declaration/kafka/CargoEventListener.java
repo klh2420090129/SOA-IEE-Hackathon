@@ -27,14 +27,21 @@ public class CargoEventListener {
     public void onEventReceived(String message) {
         log.info("Received Kafka message: {}", message);
         try {
-            DomainEvent<CargoLoadRejectedPayload> event = objectMapper.readValue(
-                    message, new TypeReference<DomainEvent<CargoLoadRejectedPayload>>() {}
-            );
+            com.fasterxml.jackson.databind.JsonNode rootNode = objectMapper.readTree(message);
+            String eventType = rootNode.has("eventType") ? rootNode.get("eventType").asText() : "";
 
-            if (EventTopics.EVENT_TYPE_CARGO_LOAD_REJECTED.equals(event.getEventType())) {
+            if (EventTopics.EVENT_TYPE_CARGO_LOAD_REJECTED.equals(eventType)) {
+                DomainEvent<CargoLoadRejectedPayload> event = objectMapper.readValue(
+                        message, new TypeReference<DomainEvent<CargoLoadRejectedPayload>>() {}
+                );
                 workflowService.processCargoLoadRejected(event);
+            } else if (EventTopics.EVENT_TYPE_CARGO_LOAD_APPROVED.equals(eventType)) {
+                DomainEvent<org.soa8.freight.common.events.CargoLoadApprovedPayload> event = objectMapper.readValue(
+                        message, new TypeReference<DomainEvent<org.soa8.freight.common.events.CargoLoadApprovedPayload>>() {}
+                );
+                workflowService.processCargoLoadApproved(event);
             } else {
-                log.info("Ignoring event type: {}", event.getEventType());
+                log.info("Ignoring event type: {}", eventType);
             }
         } catch (Exception e) {
             log.error("Failed to parse event message: {}", message, e);

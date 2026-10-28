@@ -108,12 +108,33 @@ class CompartmentControllerSecurityTest {
         ResponseEntity<?> shipperRejectResp = controller.rejectCandidate(assessment.getId(), shipperToken, req);
         assertThat(shipperRejectResp.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
 
-        // Case 4: Planner token (ROLE_LOAD_PLANNER) -> 200 OK
-        String plannerToken = "Bearer " + generateToken("planner-001", Set.of("ROLE_LOAD_PLANNER"));
+        // Case 4: Planner token (ROLE_LOAD_PLANNER) with forged req.plannerId -> 200 OK, but audit records authenticated token subject, not req.plannerId
+        String plannerToken = "Bearer " + generateToken("authenticated-planner-777", Set.of("ROLE_LOAD_PLANNER"));
+        req.plannerId = "forged-planner-identity"; // Attempting identity spoofing
         ResponseEntity<?> plannerApproveResp = controller.approveCandidate(assessment.getId(), plannerToken, req);
         assertThat(plannerApproveResp.getStatusCode()).isEqualTo(HttpStatus.OK);
         AssessmentEntity approved = (AssessmentEntity) plannerApproveResp.getBody();
         assertThat(approved.getWorkflowStatus()).isEqualTo("APPROVED");
+        assertThat(approved.getDecidedBy()).isEqualTo("authenticated-planner-777");
+
+        // Verify audit trail endpoint returns the immutable entry with authenticated claims subject
+        ResponseEntity<?> auditResp = controller.getAssessmentAuditTrail(assessment.getId(), plannerToken);
+        assertThat(auditResp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        List<?> auditList = (List<?>) auditResp.getBody();
+        assertThat(auditList).hasSize(1);
+        org.soa8.freight.compartment.model.AssessmentDecisionAuditEntity auditItem =
+                (org.soa8.freight.compartment.model.AssessmentDecisionAuditEntity) auditList.get(0);
+        assertThat(auditItem.getDecidedBy()).isEqualTo("authenticated-planner-777");
+        assertThat(auditItem.getDecision()).isEqualTo("APPROVED");
+
+        // Verify audit trail security: unauthorized access without token -> 401
+        ResponseEntity<?> unauthAuditResp = controller.getAssessmentAuditTrail(assessment.getId(), null);
+        assertThat(unauthAuditResp.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+
+        // Verify cross-tenant isolation: another shipper attempting access to this declaration's audit trail -> 403
+        String otherShipperToken = "Bearer " + generateToken("other-shipper-999", Set.of("ROLE_SHIPPER"));
+        ResponseEntity<?> crossTenantResp = controller.getAssessmentAuditTrail(assessment.getId(), otherShipperToken);
+        assertThat(crossTenantResp.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
     }
 
     @Test
