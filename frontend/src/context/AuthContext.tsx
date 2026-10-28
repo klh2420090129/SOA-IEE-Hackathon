@@ -31,24 +31,34 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   useEffect(() => {
+    let isMounted = true;
     if (token) {
       setApiAuthToken(token);
       authApi.getCurrentUser()
         .then(u => {
-          setUser(u);
-          setError(null);
+          if (isMounted) {
+            setUser(u);
+            setError(null);
+          }
         })
         .catch(() => {
-          logout();
+          if (isMounted) {
+            logout();
+          }
         })
         .finally(() => {
-          setLoading(false);
+          if (isMounted) {
+            setLoading(false);
+          }
         });
     } else {
       setApiAuthToken(null);
       setUser(null);
       setLoading(false);
     }
+    return () => {
+      isMounted = false;
+    };
   }, [token]);
 
   const login = async (username: string, roleType?: 'shipper' | 'planner') => {
@@ -64,12 +74,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const res = await authApi.login(username, password);
       localStorage.setItem(TOKEN_KEY, res.token);
       setApiAuthToken(res.token);
-      setToken(res.token);
       setUser({
         userId: res.userId,
         username: res.username,
-        roles: res.roles
+        roles: Array.from(res.roles || [])
       });
+      setToken(res.token);
     } catch (err: any) {
       setError(err.message || 'Login failed');
       throw err;

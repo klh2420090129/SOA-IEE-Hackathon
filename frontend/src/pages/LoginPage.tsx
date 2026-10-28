@@ -14,7 +14,11 @@ export const LoginPage: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await login(username, selectedRole);
+    try {
+      await login(username, selectedRole);
+    } catch {
+      // AuthContext sets error state which is rendered in the alert box
+    }
   };
 
   return (

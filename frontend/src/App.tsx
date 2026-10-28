@@ -11,6 +11,17 @@ const MainShell: React.FC = () => {
   const { user, loading } = useAuth();
   const [activeTab, setActiveTab] = useState<'shipper' | 'planner' | 'rules' | 'audit'>('planner');
 
+  // Synchronize initial active tab with user's primary role
+  React.useEffect(() => {
+    if (user && user.roles) {
+      if (user.roles.includes('ROLE_LOAD_PLANNER')) {
+        setActiveTab('planner');
+      } else if (user.roles.includes('ROLE_SHIPPER')) {
+        setActiveTab('shipper');
+      }
+    }
+  }, [user]);
+
   if (loading) {
     return (
       <div style={{
