@@ -392,10 +392,16 @@ def solve_3d_packing(command: Dict[str, Any]) -> Dict[str, Any]:
 
     duration_ms = int((time.time() - start_time) * 1000)
 
+    require_all_placed = bool(command.get("requireAllPlaced", False))
+
     # Determine status: never claim OPTIMAL
     if timeout_occurred:
         solver_status = "TIMEOUT"
     elif not placed_items and physical_units:
+        solver_status = "UNKNOWN"
+    elif require_all_placed and unassigned_items:
+        # Complete placement was strictly mandated, but heuristic could only partially assign items
+        # Heuristic cannot prove mathematical infeasibility, so it reports UNKNOWN
         solver_status = "UNKNOWN"
     else:
         solver_status = "FEASIBLE"
@@ -411,7 +417,11 @@ def solve_3d_packing(command: Dict[str, Any]) -> Dict[str, Any]:
         "evaluations": evaluations_count,
         "ruleSnapshotDigest": rule_snapshot_digest or "N/A",
         "requestedAlgorithm": algorithm_requested or ALGORITHM_PROVENANCE,
-        "effectiveAlgorithm": ALGORITHM_PROVENANCE
+        "effectiveAlgorithm": ALGORITHM_PROVENANCE,
+        "primaryObjectiveProven": False,
+        "volumeObjectiveProven": False,
+        "compactnessObjectiveProven": False,
+        "fullLexicographicOptimalityProven": False
     }
 
     result = {

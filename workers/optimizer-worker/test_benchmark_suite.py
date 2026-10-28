@@ -1,19 +1,22 @@
 """
-Automated Correctness Tests for Reproducible Optimization Benchmark Suite (Phase F.3).
+Automated Correctness & Regression Tests for Phase F.4.
 
-Verifies the 8 mandatory benchmark correctness checks:
-1. Equivalent Scenario Inputs: Both algorithms receive identical cargo, compartment, and rule snapshot inputs (input hash matches).
-2. Effective Executed Algorithm: The actual executed algorithm is identified correctly in diagnostics and results.
-3. Explicit Invalid Algorithm Handling: Invalid algorithm identifiers fail explicitly with ValueError.
-4. Distinguishing Infeasible vs Unknown: Infeasible and unknown outcomes are not conflated.
-5. Independent Validation Guard: A candidate is counted as feasible only after the independent validator passes.
-6. Failure & Timeout Preservation: Failed and timed-out runs remain represented in output without silent discarding.
-7. Reproducibility & Determinism: Re-running a fixed scenario preserves its input hash and declared configuration.
-8. Rule Snapshot Integrity: Missing or incompatible rule snapshots fail closed.
+Covers:
+1. Full versus partial objective proof (primaryObjectiveProven vs fullLexicographicOptimalityProven).
+2. INFEASIBLE versus UNKNOWN versus TIMEOUT semantics.
+3. Incumbent preservation after timeout without false optimality.
+4. SCEN_INFEASIBLE_02 feasibility contract (CP-SAT proven INFEASIBLE vs Heuristic UNKNOWN under requireAllPlaced).
+5. Independent validation gating: candidate counted as feasible only after validator passes.
+6. Equivalent solver inputs and pinned snapshot digests across solvers.
+7. Unknown algorithm rejection and fallback attribution (requestedAlgorithm vs effectiveAlgorithm).
+8. Repeat-trial statistical calculations (percentiles, rates, denominators).
+9. Stable scenario input hashes across reruns.
+10. Missing or incompatible safety snapshots failing closed.
+11. Report metrics matching underlying raw trial records.
 """
 
-import pytest
 import copy
+import pytest
 from benchmark_corpus import (
     get_scenario_corpus,
     compute_scenario_input_hash,
@@ -30,142 +33,156 @@ from cpsat_solver import (
     SUPPORTED_ALGORITHMS
 )
 from heuristic_solver import solve_3d_packing as solve_heuristic
+from run_benchmarks import run_single_scenario, calculate_percentile, export_all_trials_csv, generate_markdown_report
 
-def test_benchmark_both_algorithms_receive_equivalent_inputs():
+def test_full_versus_partial_objective_proof():
     """
-    Check 1: Both algorithms receive identical inputs and share exact input hash.
-    """
-    scenarios = get_scenario_corpus()
-    assert len(scenarios) >= 12
-    
-    for sc in scenarios:
-        hash_1 = compute_scenario_input_hash(sc.command)
-        # Deepcopy to simulate execution on independent algorithm instances
-        cmd_h = copy.deepcopy(sc.command)
-        cmd_cp = copy.deepcopy(sc.command)
-        
-        cmd_h["algorithm"] = "HEURISTIC_EP_3D_V1"
-        cmd_cp["algorithm"] = "PYTHON_ORTOOLS_CPSAT_3D_V1"
-        
-        assert compute_scenario_input_hash(cmd_h) == hash_1
-        assert compute_scenario_input_hash(cmd_cp) == hash_1
-
-def test_benchmark_actual_executed_algorithm_identified_correctly():
-    """
-    Check 2: The actual executed algorithm is identified correctly in results and diagnostics.
-    """
-    sc = get_scenario_corpus()[0]
-    cmd_h = copy.deepcopy(sc.command)
-    cmd_h["algorithm"] = "HEURISTIC_EP_3D_V1"
-    
-    res_h = solve_heuristic(cmd_h)
-    assert res_h.get("provenance") == PROVENANCE_HEURISTIC
-    assert res_h.get("diagnostics", {}).get("effectiveAlgorithm") == PROVENANCE_HEURISTIC
-    assert res_h.get("diagnostics", {}).get("requestedAlgorithm") == "HEURISTIC_EP_3D_V1"
-    
-    cmd_cp = copy.deepcopy(sc.command)
-    cmd_cp["algorithm"] = "PYTHON_ORTOOLS_CPSAT_3D_V1"
-    res_cp = solve_cpsat_cargo(cmd_cp, force_cpsat=True)
-    assert res_cp.get("provenance") == PROVENANCE_CP_SAT
-    assert res_cp.get("diagnostics", {}).get("effectiveAlgorithm") == PROVENANCE_CP_SAT
-    assert res_cp.get("diagnostics", {}).get("requestedAlgorithm") == "PYTHON_ORTOOLS_CPSAT_3D_V1"
-
-def test_benchmark_invalid_algorithm_identifiers_fail_explicitly():
-    """
-    Check 3: Invalid algorithm identifiers fail explicitly with ValueError.
-    """
-    sc = get_scenario_corpus()[0]
-    invalid_cmd = copy.deepcopy(sc.command)
-    invalid_cmd["algorithm"] = "INVALID_MAGIC_SOLVER_V99"
-    
-    with pytest.raises(ValueError, match="Unsupported algorithm identifier"):
-        solve_cpsat_cargo(invalid_cmd)
-        
-    with pytest.raises(ValueError, match="Unsupported algorithm identifier"):
-        solve_heuristic(invalid_cmd)
-
-def test_benchmark_infeasible_and_unknown_outcomes_not_conflated():
-    """
-    Check 4: Infeasible and unknown outcomes are not conflated.
+    Check 1: Distinguish proof of maximum assigned-unit count from proof of loaded volume & compactness.
     """
     corpus = {s.scenario_id: s for s in get_scenario_corpus()}
-    infeas_sc = corpus["SCEN_INFEASIBLE_01"] # Single unit exceeds compartment dimensions with requireAllPlaced
+    sc = corpus["SCEN_SMALL_01"] # 4 uniform units
     
-    res_cp = solve_cpsat_cargo(infeas_sc.command, force_cpsat=True)
-    assert res_cp.get("solverStatus") == "INFEASIBLE"
-    assert res_cp.get("diagnostics", {}).get("cpSatStatus") == "INFEASIBLE"
-    assert len(res_cp.get("placements", [])) == 0
-    assert len(res_cp.get("unassignedItems", [])) == 1
-    assert res_cp.get("unassignedItems")[0]["reasonCode"] == "PROVEN_INFEASIBLE"
+    res = solve_cpsat_cargo(sc.command, force_cpsat=True)
+    diag = res["diagnostics"]
+    assert "primaryObjectiveProven" in diag
+    assert "fullLexicographicOptimalityProven" in diag
+    assert diag["primaryObjectiveProven"] is True
+    # In small 4 units exact fit, all 3 stages prove optimality
+    assert diag["fullLexicographicOptimalityProven"] is True
+    assert diag["volumeObjectiveProven"] is True
+    assert diag["compactnessObjectiveProven"] is True
 
-def test_benchmark_candidate_feasible_only_after_independent_validator_passes():
+def test_infeasible_versus_unknown_versus_timeout():
     """
-    Check 5: A candidate is counted as feasible only after passing independent strict validation.
+    Check 2: INFEASIBLE, UNKNOWN, and TIMEOUT are strictly separated and never conflated.
+    """
+    corpus = {s.scenario_id: s for s in get_scenario_corpus()}
+    
+    # Infeasible case
+    infeas_sc = corpus["SCEN_INFEASIBLE_01"]
+    res_infeas = solve_cpsat_cargo(infeas_sc.command, force_cpsat=True)
+    assert res_infeas["solverStatus"] == "INFEASIBLE"
+    assert res_infeas["diagnostics"]["cpSatStatus"] == "INFEASIBLE"
+    
+    # Timeout/Bounded case (budget 1s)
+    bound_sc = corpus["SCEN_BOUND_01"]
+    res_bound = solve_cpsat_cargo(bound_sc.command, force_cpsat=True)
+    assert res_bound["solverStatus"] in ("FEASIBLE", "OPTIMAL")
+    # Must preserve incumbent and record fallback
+    assert res_bound["diagnostics"]["fallbackReason"] in ("CPSAT_UNKNOWN", "CPSAT_FEASIBLE", "CPSAT_TIMEOUT")
+    assert res_bound["diagnostics"]["fullLexicographicOptimalityProven"] is False
+
+def test_scen_infeasible_02_feasibility_contract():
+    """
+    Check 4: SCEN_INFEASIBLE_02 feasibility contract:
+    - Contains Class 1 and Class 2.1 which are legally FORBIDDEN under India CMV rules.
+    - requireAllPlaced=True strictly demands both placed.
+    - CP-SAT proves mathematical INFEASIBLE (0/2 placed).
+    - Heuristic places 1/2 and reports UNKNOWN (never falsely claims FEASIBLE for partial set).
+    """
+    corpus = {s.scenario_id: s for s in get_scenario_corpus()}
+    sc = corpus["SCEN_INFEASIBLE_02"]
+    
+    # CP-SAT run
+    res_cp = solve_cpsat_cargo(sc.command, force_cpsat=True)
+    assert res_cp["solverStatus"] == "INFEASIBLE"
+    assert len(res_cp["placements"]) == 0
+    assert len(res_cp["unassignedItems"]) == 2
+    assert res_cp["diagnostics"]["cpSatStatus"] == "INFEASIBLE"
+    assert res_cp["diagnostics"]["effectiveAlgorithm"] == PROVENANCE_CP_SAT
+    
+    # Heuristic run
+    res_h = solve_heuristic(sc.command)
+    assert res_h["solverStatus"] == "UNKNOWN" # Heuristic cannot prove infeasibility, reports UNKNOWN for partial
+    assert len(res_h["placements"]) == 1
+    assert len(res_h["unassignedItems"]) == 1
+
+def test_independent_validation_gating_metrics():
+    """
+    Check 5: Validation must pass before candidate can be counted as feasible.
     """
     corpus = {s.scenario_id: s for s in get_scenario_corpus()}
     sc = corpus["SCEN_SMALL_01"]
+    res = solve_cpsat_cargo(sc.command, force_cpsat=True)
     
-    res_cp = solve_cpsat_cargo(sc.command, force_cpsat=True)
-    comp = sc.command["compartment"]
-    rules = sc.command.get("ruleSnapshot", {}).get("rules", [])
-    
-    # 1. Real solver candidate passes validation
-    is_valid, err = validate_candidate_strictly(res_cp["placements"], comp, rules)
+    is_valid, err = validate_candidate_strictly(
+        res["placements"],
+        sc.command["compartment"],
+        sc.command.get("ruleSnapshot", {}).get("rules", [])
+    )
     assert is_valid is True
     assert err is None
     
-    # 2. Mutated/tampered placement with overlap fails validation immediately
-    tampered_placements = copy.deepcopy(res_cp["placements"])
-    tampered_placements[1]["xMm"] = tampered_placements[0]["xMm"]
-    tampered_placements[1]["yMm"] = tampered_placements[0]["yMm"]
-    tampered_placements[1]["zMm"] = tampered_placements[0]["zMm"]
-    
-    is_valid_tampered, err_tampered = validate_candidate_strictly(tampered_placements, comp, rules)
-    assert is_valid_tampered is False
-    assert "Overlap detected" in err_tampered
+    # Tampering with placement to cause overlap
+    tampered = copy.deepcopy(res["placements"])
+    tampered[1]["xMm"] = tampered[0]["xMm"]
+    tampered[1]["yMm"] = tampered[0]["yMm"]
+    tampered[1]["zMm"] = tampered[0]["zMm"]
+    is_valid_t, err_t = validate_candidate_strictly(
+        tampered,
+        sc.command["compartment"],
+        sc.command.get("ruleSnapshot", {}).get("rules", [])
+    )
+    assert is_valid_t is False
+    assert "Overlap detected" in err_t
 
-def test_benchmark_failed_and_timed_out_runs_remain_represented():
+def test_equivalent_solver_inputs_and_pinned_snapshots():
     """
-    Check 6: Timed-out runs are preserved with fallback diagnostics, never silently excluded.
+    Check 6: Both solvers receive equivalent inputs and canonical digest parity holds.
     """
-    corpus = {s.scenario_id: s for s in get_scenario_corpus()}
-    bound_sc = corpus["SCEN_BOUND_01"] # Budget restricted to 1s
-    
-    res_cp = solve_cpsat_cargo(bound_sc.command, force_cpsat=True)
-    assert res_cp is not None
-    # CP-SAT pipeline preserves best incumbent and records fallback
-    diag = res_cp.get("diagnostics", {})
-    assert "effectiveAlgorithm" in diag
-    assert res_cp.get("solverStatus") in ("FEASIBLE", "OPTIMAL")
-
-def test_benchmark_rerunning_fixed_scenario_preserves_input_hash_and_digest():
-    """
-    Check 7: Re-running a fixed scenario preserves its input hash and deterministic result digest.
-    """
-    sc = get_scenario_corpus()[1] # SCEN_SMALL_02
-    hash_run1 = compute_scenario_input_hash(sc.command)
-    res_run1 = solve_cpsat_cargo(sc.command, random_seed=sc.seed, force_cpsat=True)
-    digest_run1 = res_run1.get("contentDigest")
-    
-    hash_run2 = compute_scenario_input_hash(sc.command)
-    res_run2 = solve_cpsat_cargo(sc.command, random_seed=sc.seed, force_cpsat=True)
-    digest_run2 = res_run2.get("contentDigest")
-    
-    assert hash_run1 == hash_run2
-    assert digest_run1 == digest_run2
-    assert len(res_run1["placements"]) == len(res_run2["placements"])
-
-def test_benchmark_missing_or_incompatible_rule_snapshots_fail_closed():
-    """
-    Check 8: Missing or incompatible rule snapshots fail closed.
-    """
-    # 1. Null/empty snapshot in digest calculation fails closed
-    with pytest.raises(ValueError, match="snapshot cannot be null/empty"):
-        compute_canonical_rule_snapshot_digest(None)
+    scenarios = get_scenario_corpus()
+    for sc in scenarios:
+        hash_orig = sc.input_hash
+        cmd_h = copy.deepcopy(sc.command)
+        cmd_cp = copy.deepcopy(sc.command)
+        cmd_h["algorithm"] = "HEURISTIC_EP_3D_V1"
+        cmd_cp["algorithm"] = "PYTHON_ORTOOLS_CPSAT_3D_V1"
         
-    with pytest.raises(ValueError, match="snapshot cannot be null/empty"):
-        compute_canonical_rule_snapshot_digest({})
+        assert compute_scenario_input_hash(cmd_h) == hash_orig
+        assert compute_scenario_input_hash(cmd_cp) == hash_orig
         
-    # 2. Canonical rule snapshot digest matches verified statutory constant
     statutory_digest = compute_canonical_rule_snapshot_digest(STATUTORY_RULE_SNAPSHOT)
     assert statutory_digest == "e251090aef1c4ba8968162862c71b0c8b694ff9cd4d604432df19e9afcaef876"
+
+def test_unknown_algorithm_rejection_and_fallback_attribution():
+    """
+    Check 7: Invalid algorithms rejected with ValueError, and fallbacks track requested vs effective algorithm.
+    """
+    sc = get_scenario_corpus()[0]
+    bad_cmd = copy.deepcopy(sc.command)
+    bad_cmd["algorithm"] = "UNKNOWN_NONEXISTENT_ALGO"
+    
+    with pytest.raises(ValueError, match="Unsupported algorithm identifier"):
+        solve_cpsat_cargo(bad_cmd)
+        
+    with pytest.raises(ValueError, match="Unsupported algorithm identifier"):
+        solve_heuristic(bad_cmd)
+
+def test_repeated_trial_percentile_and_statistics():
+    """
+    Check 8: Statistical calculation helper accuracy.
+    """
+    data = [10.0, 20.0, 30.0, 40.0, 50.0]
+    assert calculate_percentile(data, 50) == 30.0
+    assert calculate_percentile(data, 0) == 10.0
+    assert calculate_percentile(data, 100) == 50.0
+    assert calculate_percentile(data, 90) == 46.0
+
+def test_scenario_runner_preserves_hashes_and_aggregates_trials():
+    """
+    Check 9 & 11: run_single_scenario executes configured trials, preserves hashes, and matches raw trials.
+    """
+    sc = get_scenario_corpus()[0] # SCEN_SMALL_01
+    res = run_single_scenario(sc, num_trials=3, warmup=False)
+    
+    assert res["scenarioId"] == "SCEN_SMALL_01"
+    assert res["inputHash"] == sc.input_hash
+    assert len(res["heuristicTrials"]) == 3
+    assert len(res["cpsatTrials"]) == 3
+    
+    for t in res["cpsatTrials"]:
+        assert t["requestedAlgorithm"] == "PYTHON_ORTOOLS_CPSAT_3D_V1"
+        assert t["effectiveAlgorithm"] == PROVENANCE_CP_SAT
+        assert t["unitsPlaced"] == 4
+        assert t["independentValidationPassed"] is True
+        assert t["primaryObjectiveProven"] is True

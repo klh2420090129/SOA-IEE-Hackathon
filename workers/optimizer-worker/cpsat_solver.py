@@ -542,10 +542,14 @@ def solve_cpsat_cargo(command: Dict[str, Any],
         if is_valid:
             # Check if CP-SAT solution is at least as good as heuristic incumbent
             if len(cp_placements) >= len(h_placements):
-                # When CP-SAT proves optimality for Stage 1 (placed count), report OPTIMAL.
-                # A partial placement where remaining units cannot fit is mathematically optimal
-                # for the encoded model. If Stage 1 did not prove optimality, report FEASIBLE.
-                if stage_proven["stage1CountProven"] and len(cp_placements) > 0:
+                # When CP-SAT proves optimality for Stage 1 (placed count), primary objective is proven.
+                # Full lexicographic optimality is proven only if all attempted stages proved optimality.
+                stage1_proven = bool(stage_proven.get("stage1CountProven", False))
+                stage2_proven = bool(stage_proven.get("stage2VolumeProven", False))
+                stage3_proven = bool(stage_proven.get("stage3CompactnessProven", False))
+                full_lex_proven = stage1_proven and stage2_proven and stage3_proven
+
+                if stage1_proven and len(cp_placements) > 0:
                     solver_status_name = "OPTIMAL"
                 elif cp_placements:
                     solver_status_name = "FEASIBLE"
@@ -573,7 +577,11 @@ def solve_cpsat_cargo(command: Dict[str, Any],
                         "version": ALGORITHM_VERSION,
                         "ortoolsVersion": "9.10.4067",
                         "cpSatStatus": solver.StatusName(final_status_code),
-                        "modelOptimalityProven": stage_proven["stage1CountProven"],
+                        "modelOptimalityProven": stage1_proven,
+                        "primaryObjectiveProven": stage1_proven,
+                        "volumeObjectiveProven": stage2_proven,
+                        "compactnessObjectiveProven": stage3_proven,
+                        "fullLexicographicOptimalityProven": full_lex_proven,
                         "lexicographicStages": stage_proven,
                         "compartmentScope": "SINGLE_COMPARTMENT_ENCODED",
                         "unitsTotal": n,
@@ -594,6 +602,10 @@ def solve_cpsat_cargo(command: Dict[str, Any],
                 heuristic_res["diagnostics"]["fallbackReason"] = "INCUMBENT_SUPERIOR_QUANTITY"
                 heuristic_res["diagnostics"]["requestedAlgorithm"] = algorithm_requested or PROVENANCE_CP_SAT
                 heuristic_res["diagnostics"]["effectiveAlgorithm"] = heuristic_res.get("provenance", PROVENANCE_HEURISTIC)
+                heuristic_res["diagnostics"]["primaryObjectiveProven"] = False
+                heuristic_res["diagnostics"]["volumeObjectiveProven"] = False
+                heuristic_res["diagnostics"]["compactnessObjectiveProven"] = False
+                heuristic_res["diagnostics"]["fullLexicographicOptimalityProven"] = False
                 return heuristic_res
         else:
             logger.warning("CP-SAT candidate failed independent revalidation: %s. Falling back to heuristic incumbent.", validation_err)
@@ -601,6 +613,10 @@ def solve_cpsat_cargo(command: Dict[str, Any],
             heuristic_res["diagnostics"]["fallbackReason"] = f"CPSAT_REVALIDATION_FAILED: {validation_err}"
             heuristic_res["diagnostics"]["requestedAlgorithm"] = algorithm_requested or PROVENANCE_CP_SAT
             heuristic_res["diagnostics"]["effectiveAlgorithm"] = heuristic_res.get("provenance", PROVENANCE_HEURISTIC)
+            heuristic_res["diagnostics"]["primaryObjectiveProven"] = False
+            heuristic_res["diagnostics"]["volumeObjectiveProven"] = False
+            heuristic_res["diagnostics"]["compactnessObjectiveProven"] = False
+            heuristic_res["diagnostics"]["fullLexicographicOptimalityProven"] = False
             return heuristic_res
 
     elif final_status_code == cp_model.INFEASIBLE:
@@ -611,6 +627,10 @@ def solve_cpsat_cargo(command: Dict[str, Any],
             heuristic_res["diagnostics"]["cpsatStatus"] = "INFEASIBLE_FOR_FULL_SET"
             heuristic_res["diagnostics"]["requestedAlgorithm"] = algorithm_requested or PROVENANCE_CP_SAT
             heuristic_res["diagnostics"]["effectiveAlgorithm"] = heuristic_res.get("provenance", PROVENANCE_HEURISTIC)
+            heuristic_res["diagnostics"]["primaryObjectiveProven"] = False
+            heuristic_res["diagnostics"]["volumeObjectiveProven"] = False
+            heuristic_res["diagnostics"]["compactnessObjectiveProven"] = False
+            heuristic_res["diagnostics"]["fullLexicographicOptimalityProven"] = False
             return heuristic_res
         else:
             return {
@@ -635,15 +655,23 @@ def solve_cpsat_cargo(command: Dict[str, Any],
                     "engine": PROVENANCE_CP_SAT,
                     "cpSatStatus": "INFEASIBLE",
                     "proof": "CP-SAT exhaustive search proved no solution exists",
+                    "primaryObjectiveProven": True, # Infeasibility is mathematically proven
+                    "volumeObjectiveProven": False,
+                    "compactnessObjectiveProven": False,
+                    "fullLexicographicOptimalityProven": False,
                     "requestedAlgorithm": algorithm_requested or PROVENANCE_CP_SAT,
                     "effectiveAlgorithm": PROVENANCE_CP_SAT
                 }
             }
     else:
-        # TIMEOUT or UNKNOWN
+        # TIMEOUT or UNKNOWN: Preserving best valid heuristic incumbent
         logger.info("CP-SAT search returned %s. Preserving best valid heuristic incumbent.", solver.StatusName(final_status_code))
         heuristic_res["diagnostics"]["cpsatInvoked"] = True
         heuristic_res["diagnostics"]["fallbackReason"] = f"CPSAT_{solver.StatusName(final_status_code)}"
         heuristic_res["diagnostics"]["requestedAlgorithm"] = algorithm_requested or PROVENANCE_CP_SAT
         heuristic_res["diagnostics"]["effectiveAlgorithm"] = heuristic_res.get("provenance", PROVENANCE_HEURISTIC)
+        heuristic_res["diagnostics"]["primaryObjectiveProven"] = False
+        heuristic_res["diagnostics"]["volumeObjectiveProven"] = False
+        heuristic_res["diagnostics"]["compactnessObjectiveProven"] = False
+        heuristic_res["diagnostics"]["fullLexicographicOptimalityProven"] = False
         return heuristic_res
