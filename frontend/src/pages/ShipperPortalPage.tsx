@@ -5,11 +5,13 @@ import {
   Trash2, 
   Search, 
   Send, 
-  AlertCircle
+  AlertCircle,
+  Upload
 } from 'lucide-react';
 import { declarationApi } from '../api/declarationApi';
 import { CargoDeclaration, CargoItemInput, DeclarationWorkflowProjection } from '../types/api';
 import { useAuth } from '../context/AuthContext';
+import { BulkCargoImportModal } from '../components/declaration/BulkCargoImportModal';
 
 export const ShipperPortalPage: React.FC = () => {
   const { user } = useAuth();
@@ -54,6 +56,15 @@ export const ShipperPortalPage: React.FC = () => {
   const [searchId, setSearchId] = useState('');
   const [searchLoading, setSearchLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+
+  const handleImportItems = (importedItems: CargoItemInput[], replaceExisting: boolean) => {
+    if (replaceExisting) {
+      setItems(importedItems);
+    } else {
+      setItems((prev) => [...prev, ...importedItems]);
+    }
+  };
 
   const addItemRow = () => {
     setItems([
@@ -287,23 +298,44 @@ export const ShipperPortalPage: React.FC = () => {
           <h4 style={{ margin: 0, fontSize: '0.95rem' }}>
             Consignment Cargo Items ({items.length})
           </h4>
-          <button
-            type="button"
-            onClick={addItemRow}
-            style={{
-              padding: '6px 12px',
-              background: 'rgba(59, 130, 246, 0.15)',
-              color: '#60a5fa',
-              border: '1px solid rgba(59, 130, 246, 0.3)',
-              borderRadius: '6px',
-              fontSize: '0.8rem',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px'
-            }}
-          >
-            <Plus size={14} /> Add Cargo Item
-          </button>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button
+              type="button"
+              data-testid="open-bulk-import-btn"
+              onClick={() => setIsImportModalOpen(true)}
+              style={{
+                padding: '6px 12px',
+                background: 'rgba(16, 185, 129, 0.15)',
+                color: '#34d399',
+                border: '1px solid rgba(16, 185, 129, 0.3)',
+                borderRadius: '6px',
+                fontSize: '0.8rem',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                cursor: 'pointer'
+              }}
+            >
+              <Upload size={14} /> Bulk Import (CSV / JSON)
+            </button>
+            <button
+              type="button"
+              onClick={addItemRow}
+              style={{
+                padding: '6px 12px',
+                background: 'rgba(59, 130, 246, 0.15)',
+                color: '#60a5fa',
+                border: '1px solid rgba(59, 130, 246, 0.3)',
+                borderRadius: '6px',
+                fontSize: '0.8rem',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px'
+              }}
+            >
+              <Plus size={14} /> Add Cargo Item
+            </button>
+          </div>
         </div>
 
         <div style={{ overflowX: 'auto', marginBottom: '20px' }}>
@@ -445,6 +477,14 @@ export const ShipperPortalPage: React.FC = () => {
           </button>
         </div>
       </form>
+
+      {/* Bulk Import Modal */}
+      <BulkCargoImportModal
+        isOpen={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
+        onImportItems={handleImportItems}
+        existingItemCount={items.length}
+      />
     </div>
   );
 };
