@@ -5,6 +5,7 @@ import { LoginPage } from './pages/LoginPage';
 import { ShipperPortalPage } from './pages/ShipperPortalPage';
 import { PlannerReviewPage } from './pages/PlannerReviewPage';
 import { RulesAndAuditPage } from './pages/RulesAndAuditPage';
+import { CanvasErrorBoundary } from './components/common/CanvasErrorBoundary';
 import { Loader2 } from 'lucide-react';
 
 const MainShell: React.FC = () => {
@@ -47,9 +48,11 @@ const MainShell: React.FC = () => {
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       <NavigationHeader activeTab={activeTab} onSelectTab={setActiveTab} />
       <main style={{ flex: 1, padding: '28px 24px' }}>
-        {activeTab === 'shipper' && <ShipperPortalPage />}
-        {activeTab === 'planner' && <PlannerReviewPage />}
-        {(activeTab === 'rules' || activeTab === 'audit') && <RulesAndAuditPage />}
+        <CanvasErrorBoundary>
+          {activeTab === 'shipper' && <ShipperPortalPage />}
+          {activeTab === 'planner' && <PlannerReviewPage />}
+          {(activeTab === 'rules' || activeTab === 'audit') && <RulesAndAuditPage />}
+        </CanvasErrorBoundary>
       </main>
     </div>
   );

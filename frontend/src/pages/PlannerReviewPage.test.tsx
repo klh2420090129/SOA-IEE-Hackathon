@@ -90,4 +90,68 @@ describe('PlannerReviewPage Component Workflow Integration', () => {
       expect(screen.getByText(/Workflow: PENDING_APPROVAL/i)).toBeInTheDocument();
     });
   });
+
+  it('renders visible error state when optimization submission fails and does not crash shell', async () => {
+    const mockAssessment = {
+      id: 'asmt-opt-fail',
+      declarationId: 'decl-opt-fail',
+      declarationVersion: 1,
+      ruleSnapshotId: 'snap-2026-q4-v1',
+      compartmentId: 'comp-standard-40ft',
+      workflowStatus: 'DRAFT'
+    };
+
+    const mockDeclaration = {
+      id: 'decl-opt-fail',
+      referenceNumber: 'DEC-OPT-FAIL',
+      shipperId: 'usr-shipper-001',
+      version: 1,
+      status: 'SUBMITTED',
+      origin: 'Mumbai',
+      destination: 'Delhi',
+      items: [
+        {
+          cargoItemId: 'ITEM-1',
+          description: 'Solvent',
+          hazardClass: '3',
+          unNumber: 'UN1993',
+          lengthMm: 1000,
+          widthMm: 1000,
+          heightMm: 1000,
+          weightKg: 500,
+          stackable: true,
+          quantity: 1
+        }
+      ]
+    };
+
+    vi.spyOn(assessmentApi, 'getAssessment').mockResolvedValue(mockAssessment as any);
+    vi.spyOn(declarationApi, 'getDeclaration').mockResolvedValue(mockDeclaration as any);
+
+    const optimizationApiModule = await import('../api/optimizationApi');
+    vi.spyOn(optimizationApiModule.optimizationApi, 'submitJob').mockRejectedValue(
+      new Error('Optimization engine queue full')
+    );
+
+    render(<PlannerReviewPage />);
+
+    const input = screen.getByPlaceholderText(/Lookup Assessment ID/i);
+    fireEvent.change(input, { target: { value: 'asmt-opt-fail' } });
+
+    const lookupBtn = screen.getByRole('button', { name: /Lookup/i });
+    fireEvent.click(lookupBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Run Optimization/i)).toBeInTheDocument();
+    });
+
+    const optBtn = screen.getByText(/Run Optimization/i);
+    fireEvent.click(optBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Optimization engine queue full/i)).toBeInTheDocument();
+      // Ensure page shell still exists
+      expect(screen.getByTestId('candidate-viewer-3d')).toBeInTheDocument();
+    });
+  });
 });

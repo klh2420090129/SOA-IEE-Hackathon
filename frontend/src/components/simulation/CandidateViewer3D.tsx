@@ -23,6 +23,7 @@ import {
   CheckCircle2, 
   XCircle
 } from 'lucide-react';
+import { CanvasErrorBoundary } from '../common/CanvasErrorBoundary';
 
 interface CandidateViewer3DProps {
   compartment: CompartmentDto;
@@ -37,6 +38,13 @@ interface CandidateViewer3DProps {
 const CompartmentMesh: React.FC<{ comp: RenderableCompartment }> = ({ comp }) => {
   const [l, h, w] = comp.size;
   const [cx, cy, cz] = comp.center;
+
+  const edgesGeo = useMemo(() => {
+    const boxGeo = new THREE.BoxGeometry(l, h, w);
+    const edges = new THREE.EdgesGeometry(boxGeo);
+    boxGeo.dispose();
+    return edges;
+  }, [l, h, w]);
 
   return (
     <group position={[cx, cy, cz]}>
@@ -53,8 +61,7 @@ const CompartmentMesh: React.FC<{ comp: RenderableCompartment }> = ({ comp }) =>
       </mesh>
 
       {/* Outer bounding line cage */}
-      <lineSegments>
-        <edgesGeometry args={[new THREE.BoxGeometry(l, h, w)]} />
+      <lineSegments geometry={edgesGeo}>
         <lineBasicMaterial color="#38bdf8" linewidth={2} />
       </lineSegments>
 
@@ -123,6 +130,13 @@ const CargoBox: React.FC<{
     }
   }
 
+  const edgesGeo = useMemo(() => {
+    const boxGeo = new THREE.BoxGeometry(sizeX, sizeY, sizeZ);
+    const edges = new THREE.EdgesGeometry(boxGeo);
+    boxGeo.dispose();
+    return edges;
+  }, [sizeX, sizeY, sizeZ]);
+
   const { color, edgeColor } = getHazardColor(box.hazardClass, isSelected, isViolation);
 
   if (currentOpacity <= 0.05) {
@@ -144,8 +158,7 @@ const CargoBox: React.FC<{
       </mesh>
 
       {/* Wireframe Outline */}
-      <lineSegments>
-        <edgesGeometry args={[new THREE.BoxGeometry(sizeX, sizeY, sizeZ)]} />
+      <lineSegments geometry={edgesGeo}>
         <lineBasicMaterial color={edgeColor} linewidth={isSelected || isViolation ? 3 : 1} />
       </lineSegments>
 
@@ -401,55 +414,57 @@ export const CandidateViewer3D: React.FC<CandidateViewer3DProps> = ({
         position: 'relative',
         overflow: 'hidden'
       }}>
-        <Canvas
-          camera={{ position: [10, 8, 9], fov: 45 }}
-          shadows
-          style={{ width: '100%', height: '100%' }}
-          onPointerDown={() => handleSelectBox(null)}
-        >
-          <ambientLight intensity={0.8} />
-          <directionalLight position={[12, 18, 10]} intensity={1.2} castShadow />
-          <directionalLight position={[-10, 10, -10]} intensity={0.4} />
+        <CanvasErrorBoundary>
+          <Canvas
+            camera={{ position: [10, 8, 9], fov: 45 }}
+            shadows
+            style={{ width: '100%', height: '100%' }}
+            onPointerDown={() => handleSelectBox(null)}
+          >
+            <ambientLight intensity={0.8} />
+            <directionalLight position={[12, 18, 10]} intensity={1.2} castShadow />
+            <directionalLight position={[-10, 10, -10]} intensity={0.4} />
 
-          {/* Reference Ground Grid */}
-          <Grid
-            position={[0, -0.01, 0]}
-            args={[24, 24]}
-            cellSize={1}
-            cellThickness={0.6}
-            cellColor="#1e293b"
-            sectionSize={4}
-            sectionThickness={1.2}
-            sectionColor="#334155"
-            fadeDistance={30}
-          />
-
-          {/* Compartment Bounding Mesh */}
-          <CompartmentMesh comp={worldCompartment} />
-
-          {/* 3D Placed Cargo Cuboids */}
-          {renderableBoxes.map((box, idx) => (
-            <CargoBox
-              key={box.placementId || idx}
-              box={box}
-              boxIndex={idx}
-              totalBoxes={renderableBoxes.length}
-              animationProgress={playbackProgress}
-              isSelected={selectedBox?.placementId === box.placementId}
-              isViolation={violationItemIds.has(box.cargoItemId)}
-              onClick={() => handleSelectBox(box)}
+            {/* Reference Ground Grid */}
+            <Grid
+              position={[0, -0.01, 0]}
+              args={[24, 24]}
+              cellSize={1}
+              cellThickness={0.6}
+              cellColor="#1e293b"
+              sectionSize={4}
+              sectionThickness={1.2}
+              sectionColor="#334155"
+              fadeDistance={30}
             />
-          ))}
 
-          <OrbitControls
-            ref={controlsRef}
-            target={[0, 1.3, 0]}
-            maxPolarAngle={Math.PI / 2 + 0.05}
-            minDistance={2}
-            maxDistance={35}
-            makeDefault
-          />
-        </Canvas>
+            {/* Compartment Bounding Mesh */}
+            <CompartmentMesh comp={worldCompartment} />
+
+            {/* 3D Placed Cargo Cuboids */}
+            {renderableBoxes.map((box, idx) => (
+              <CargoBox
+                key={box.placementId || idx}
+                box={box}
+                boxIndex={idx}
+                totalBoxes={renderableBoxes.length}
+                animationProgress={playbackProgress}
+                isSelected={selectedBox?.placementId === box.placementId}
+                isViolation={violationItemIds.has(box.cargoItemId)}
+                onClick={() => handleSelectBox(box)}
+              />
+            ))}
+
+            <OrbitControls
+              ref={controlsRef}
+              target={[0, 1.3, 0]}
+              maxPolarAngle={Math.PI / 2 + 0.05}
+              minDistance={2}
+              maxDistance={35}
+              makeDefault
+            />
+          </Canvas>
+        </CanvasErrorBoundary>
 
         {/* Notice on Animation Scope */}
         {isPlaying && (

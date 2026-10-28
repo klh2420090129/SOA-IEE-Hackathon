@@ -153,4 +153,44 @@ describe('CandidateViewer3D Component', () => {
     expect(screen.getByText(/VIOLATION DETECTED \(1\)/i)).toBeInTheDocument();
     expect(screen.getByText(/Cryptographic Safety Notice/i)).toBeInTheDocument();
   });
+
+  it('handles malformed layout placements gracefully without NaN crashes', () => {
+    const malformedLayout: CandidateLayoutDto = {
+      layoutId: 'layout-malformed',
+      layoutVersion: 1,
+      compartmentId: 'comp-standard-40ft',
+      contentDigest: 'malformed-digest',
+      solverStatus: 'FEASIBLE',
+      provenance: 'TEST_ROBUSTNESS',
+      placements: [
+        {
+          placementId: 'p-nan',
+          cargoItemId: 'ITEM-BAD',
+          instanceIndex: 0,
+          hazardClass: '3',
+          unNumber: 'UN1993',
+          xMm: NaN as any,
+          yMm: undefined as any,
+          zMm: null as any,
+          lengthMm: 0,
+          widthMm: -50,
+          heightMm: NaN as any,
+          weightKg: NaN as any,
+          stackable: false
+        }
+      ],
+      unassignedItems: []
+    };
+
+    render(
+      <CandidateViewer3D
+        compartment={mockCompartment}
+        layout={malformedLayout}
+        validation={mockValidation}
+      />
+    );
+
+    expect(screen.getByTestId('r3f-canvas')).toBeInTheDocument();
+    expect(screen.getByText(/FEASIBLE \(TEST_ROBUSTNESS\)/i)).toBeInTheDocument();
+  });
 });

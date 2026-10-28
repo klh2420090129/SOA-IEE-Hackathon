@@ -90,15 +90,18 @@ export function convertPlacementToWorld(
   placement: ItemPlacementDto,
   compartment: CompartmentDto
 ): RenderableBoxGeometry {
-  const compLM = (compartment.lengthMm || 12000) * MM_TO_METERS;
-  const compWM = (compartment.widthMm || 2400) * MM_TO_METERS;
+  const safeCompL = Number.isFinite(compartment?.lengthMm) && compartment.lengthMm > 0 ? compartment.lengthMm : 12000;
+  const safeCompW = Number.isFinite(compartment?.widthMm) && compartment.widthMm > 0 ? compartment.widthMm : 2400;
 
-  const xMm = placement.xMm || 0;
-  const yMm = placement.yMm || 0;
-  const zMm = placement.zMm || 0;
-  const lenMm = placement.lengthMm || 1000;
-  const widMm = placement.widthMm || 1000;
-  const heiMm = placement.heightMm || 1000;
+  const compLM = safeCompL * MM_TO_METERS;
+  const compWM = safeCompW * MM_TO_METERS;
+
+  const xMm = Number.isFinite(placement?.xMm) ? Number(placement.xMm) : 0;
+  const yMm = Number.isFinite(placement?.yMm) ? Number(placement.yMm) : 0;
+  const zMm = Number.isFinite(placement?.zMm) ? Number(placement.zMm) : 0;
+  const lenMm = Number.isFinite(placement?.lengthMm) && placement.lengthMm > 0 ? Number(placement.lengthMm) : 1000;
+  const widMm = Number.isFinite(placement?.widthMm) && placement.widthMm > 0 ? Number(placement.widthMm) : 1000;
+  const heiMm = Number.isFinite(placement?.heightMm) && placement.heightMm > 0 ? Number(placement.heightMm) : 1000;
 
   const placedLM = lenMm * MM_TO_METERS;
   const placedWM = widMm * MM_TO_METERS;
@@ -116,15 +119,15 @@ export function convertPlacementToWorld(
   const maxZ = centerZ + placedWM / 2;
 
   return {
-    placementId: placement.placementId || `${placement.cargoItemId}-${placement.instanceIndex}`,
-    cargoItemId: placement.cargoItemId,
-    instanceIndex: placement.instanceIndex,
-    hazardClass: placement.hazardClass,
-    unNumber: placement.unNumber,
-    weightKg: placement.weightKg,
-    stackable: Boolean(placement.stackable),
-    maxStackWeightKg: placement.maxStackWeightKg !== undefined ? placement.maxStackWeightKg : null,
-    orientation: placement.orientation || 'DEFAULT',
+    placementId: placement?.placementId || `${placement?.cargoItemId || 'item'}-${placement?.instanceIndex ?? 0}`,
+    cargoItemId: placement?.cargoItemId || 'UNKNOWN',
+    instanceIndex: placement?.instanceIndex ?? 0,
+    hazardClass: placement?.hazardClass || 'DEFAULT',
+    unNumber: placement?.unNumber || 'UN0000',
+    weightKg: Number.isFinite(placement?.weightKg) ? Number(placement.weightKg) : 0,
+    stackable: Boolean(placement?.stackable),
+    maxStackWeightKg: Number.isFinite(placement?.maxStackWeightKg) ? Number(placement.maxStackWeightKg) : null,
+    orientation: placement?.orientation || 'DEFAULT',
     size: [placedLM, placedHM, placedWM],
     center: [centerX, centerY, centerZ],
     min: [minX, minY, minZ],

@@ -25,6 +25,7 @@ import {
 } from '../types/api';
 import { CandidateViewer2D } from '../components/simulation/CandidateViewer2D';
 import { CandidateViewer3D } from '../components/simulation/CandidateViewer3D';
+import { CanvasErrorBoundary } from '../components/common/CanvasErrorBoundary';
 import { useOptimizationJob } from '../hooks/useOptimizationJob';
 import { useAuth } from '../context/AuthContext';
 
@@ -142,14 +143,25 @@ export const PlannerReviewPage: React.FC = () => {
         timeLimitSeconds: 20
       });
 
+      if (!job || !job.jobId) {
+        throw new Error('Optimization service returned invalid job submission response without jobId');
+      }
+
       setActionMessage(`Optimization job ${job.jobId.slice(0, 8)} submitted. Polling status...`);
       const layout = await pollJob(job.jobId);
       setCandidateLayout(layout);
 
       // Record candidate layout in assessment
       setActionMessage('Recording candidate layout in Compartment Assessment...');
-      const updatedAsmt = await assessmentApi.recordCandidate(assessment.id, layout);
-      setAssessment(updatedAsmt);
+      let updatedAsmt = assessment;
+      try {
+        updatedAsmt = await assessmentApi.recordCandidate(assessment.id, layout);
+        setAssessment(updatedAsmt);
+      } catch (recErr: any) {
+        console.error('Candidate persistence error:', recErr);
+        setErrorMessage(`Candidate layout produced, but recording to assessment failed: ${recErr.message}`);
+        return;
+      }
 
       // Trigger automatic zero-trust validation audit
       await handleExecuteValidation(updatedAsmt, layout);
@@ -496,13 +508,15 @@ export const PlannerReviewPage: React.FC = () => {
 
       {/* Primary Visualizer Viewport */}
       {viewMode === '3d' ? (
-        <CandidateViewer3D
-          compartment={compartment}
-          layout={candidateLayout}
-          validation={validationResult}
-          isApproved={isApproved}
-          isRejected={isRejected}
-        />
+        <CanvasErrorBoundary onFallbackTo2D={() => setViewMode('2d')}>
+          <CandidateViewer3D
+            compartment={compartment}
+            layout={candidateLayout}
+            validation={validationResult}
+            isApproved={isApproved}
+            isRejected={isRejected}
+          />
+        </CanvasErrorBoundary>
       ) : (
         <CandidateViewer2D
           compartment={compartment}
