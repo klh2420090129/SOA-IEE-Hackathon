@@ -100,27 +100,102 @@ export const PlannerReviewPage: React.FC = () => {
   };
 
   const handleLookupAssessment = async () => {
-    if (!assessmentIdInput.trim()) return;
+    const rawInput = assessmentIdInput.trim();
+    if (!rawInput) return;
     setLoading(true);
     setErrorMessage(null);
     setActionMessage('Looking up assessment...');
     try {
-      const asmt = await assessmentApi.getAssessment(assessmentIdInput.trim());
+      let asmt: AssessmentEntity | null = null;
+      let decl: CargoDeclaration | null = null;
+
+      // Step 1: Attempt direct Assessment lookup
+      try {
+        asmt = await assessmentApi.getAssessment(rawInput);
+      } catch (asmtErr: any) {
+        // If not found as an assessment, check if the input is a Declaration ID
+        try {
+          const projection = await declarationApi.getWorkflowProjection(rawInput);
+          if (projection && projection.assessmentId) {
+            asmt = await assessmentApi.getAssessment(projection.assessmentId);
+            setActionMessage(`Resolved Declaration ${rawInput.slice(0, 8)} to Assessment ${asmt.id.slice(0, 8)}`);
+          } else {
+            throw asmtErr;
+          }
+        } catch {
+          // Both lookups failed, rethrow original error
+          throw asmtErr;
+        }
+      }
+
+      if (!asmt) {
+        throw new Error(`Assessment not found: ${rawInput}`);
+      }
+
+      // Successfully resolved assessment: set assessment state
       setAssessment(asmt);
-      const decl = await declarationApi.getDeclaration(asmt.declarationId);
-      setDeclaration(decl);
+
+      // Load associated declaration
+      try {
+        decl = await declarationApi.getDeclaration(asmt.declarationId);
+        setDeclaration(decl);
+      } catch {
+        setDeclaration(null);
+      }
+
+      // Load associated candidate layout if one exists
+      if (asmt.candidateLayoutId) {
+        try {
+          const layoutEntity = await assessmentApi.getCurrentLayout(asmt.id);
+          if (layoutEntity) {
+            const placements = typeof layoutEntity.placementsJson === 'string'
+              ? JSON.parse(layoutEntity.placementsJson)
+              : (layoutEntity.placements || []);
+            setCandidateLayout({
+              layoutId: layoutEntity.layoutId,
+              layoutVersion: layoutEntity.layoutVersion,
+              compartmentId: layoutEntity.compartmentId,
+              contentDigest: layoutEntity.contentDigest,
+              solverStatus: layoutEntity.solverStatus,
+              provenance: layoutEntity.provenance,
+              ruleSnapshotId: asmt.ruleSnapshotId,
+              placements,
+              unassignedItems: []
+            });
+          }
+        } catch (layoutErr) {
+          console.warn('Could not load candidate layout for assessment:', layoutErr);
+          setCandidateLayout(null);
+        }
+      } else {
+        setCandidateLayout(null);
+      }
 
       // If validation result ID exists, retrieve it
       if (asmt.validationId) {
         try {
           const val = await validationApi.getValidationRun(asmt.validationId);
           setValidationResult(val);
-        } catch {}
+        } catch {
+          setValidationResult(null);
+        }
+      } else {
+        setValidationResult(null);
       }
 
-      setActionMessage(`Assessment ${asmt.id} loaded (Workflow: ${asmt.workflowStatus})`);
+      setActionMessage(`Assessment ${asmt.id.slice(0, 8)} loaded (Workflow: ${asmt.workflowStatus})`);
     } catch (err: any) {
-      setErrorMessage(err.message || 'Assessment not found');
+      // Clear stale assessment and layout data on failed lookup to avoid visual mismatch
+      setAssessment(null);
+      setDeclaration(null);
+      setCandidateLayout(null);
+      setValidationResult(null);
+      setActionMessage('');
+      setErrorMessage(
+        err.message?.includes('not found')
+          ? `Assessment not found: ${rawInput}. Enter a valid Assessment ID or Declaration ID.`
+          : (err.message || 'Assessment not found')
+      );
     } finally {
       setLoading(false);
     }
@@ -285,7 +360,7 @@ export const PlannerReviewPage: React.FC = () => {
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <input
             type="text"
-            placeholder="Or Lookup Assessment ID..."
+            placeholder="Lookup Assessment or Declaration ID..."
             value={assessmentIdInput}
             onChange={(e) => setAssessmentIdInput(e.target.value)}
             style={{ width: '260px', fontSize: '0.85rem' }}

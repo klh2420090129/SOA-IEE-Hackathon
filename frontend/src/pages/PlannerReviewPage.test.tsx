@@ -32,7 +32,7 @@ describe('PlannerReviewPage Component Workflow Integration', () => {
   it('renders initial lookup inputs and toggle tabs', () => {
     render(<PlannerReviewPage />);
     expect(screen.getByPlaceholderText(/Enter Declaration ID/i)).toBeInTheDocument();
-    expect(screen.getByPlaceholderText(/Lookup Assessment ID/i)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Lookup Assessment or Declaration ID/i)).toBeInTheDocument();
     expect(screen.getByText(/Interactive 3D Simulation/i)).toBeInTheDocument();
     expect(screen.getByText(/2D Floor-Plan & Table Fallback/i)).toBeInTheDocument();
   });
@@ -52,7 +52,7 @@ describe('PlannerReviewPage Component Workflow Integration', () => {
     expect(screen.queryByTestId('candidate-viewer-3d')).not.toBeInTheDocument();
   });
 
-  it('loads assessment and declaration when looked up by ID', async () => {
+  it('loads assessment and declaration when looked up by direct Assessment ID', async () => {
     const mockAssessment = {
       id: 'asmt-test-12345678',
       declarationId: 'decl-test-1',
@@ -79,7 +79,7 @@ describe('PlannerReviewPage Component Workflow Integration', () => {
 
     render(<PlannerReviewPage />);
 
-    const input = screen.getByPlaceholderText(/Lookup Assessment ID/i);
+    const input = screen.getByPlaceholderText(/Lookup Assessment or Declaration ID/i);
     fireEvent.change(input, { target: { value: 'asmt-test-12345678' } });
 
     const lookupBtn = screen.getByRole('button', { name: /Lookup/i });
@@ -88,6 +88,101 @@ describe('PlannerReviewPage Component Workflow Integration', () => {
     await waitFor(() => {
       expect(screen.getByText(/Assessment #asmt-tes/i)).toBeInTheDocument();
       expect(screen.getByText(/Workflow: PENDING_APPROVAL/i)).toBeInTheDocument();
+    });
+  });
+
+  it('resolves and loads assessment when looked up by Declaration ID via workflow projection', async () => {
+    const mockAssessment = {
+      id: 'd03ad53e-fb93-45f6-a222-9387f77d312c',
+      declarationId: '7dbc4c82-2d46-4f8d-b45d-c8c44aed1b81',
+      declarationVersion: 1,
+      ruleSnapshotId: 'snap-2026-q4-v1',
+      compartmentId: 'comp-standard-40ft',
+      workflowStatus: 'REJECTED',
+      candidateLayoutId: 'lay-rej-01',
+      candidateLayoutVersion: 1
+    };
+
+    const mockDeclaration = {
+      id: '7dbc4c82-2d46-4f8d-b45d-c8c44aed1b81',
+      referenceNumber: 'DEC-REJ-001',
+      shipperId: 'usr-shipper-001',
+      version: 1,
+      status: 'REJECTED',
+      origin: 'Nhava Sheva',
+      destination: 'Dadri',
+      items: []
+    };
+
+    const mockProjection = {
+      declarationId: '7dbc4c82-2d46-4f8d-b45d-c8c44aed1b81',
+      assessmentId: 'd03ad53e-fb93-45f6-a222-9387f77d312c',
+      workflowStatus: 'REJECTED',
+      rejectionReasonCode: 'HAZARD_SEGREGATION_VIOLATION'
+    };
+
+    // Assessment lookup with declaration ID fails directly with 404
+    vi.spyOn(assessmentApi, 'getAssessment').mockImplementation(async (id: string) => {
+      if (id === 'd03ad53e-fb93-45f6-a222-9387f77d312c') return mockAssessment as any;
+      throw new Error(`Assessment not found: ${id}`);
+    });
+    vi.spyOn(declarationApi, 'getWorkflowProjection').mockResolvedValue(mockProjection as any);
+    vi.spyOn(declarationApi, 'getDeclaration').mockResolvedValue(mockDeclaration as any);
+
+    render(<PlannerReviewPage />);
+
+    const input = screen.getByPlaceholderText(/Lookup Assessment or Declaration ID/i);
+    fireEvent.change(input, { target: { value: '7dbc4c82-2d46-4f8d-b45d-c8c44aed1b81' } });
+
+    const lookupBtn = screen.getByRole('button', { name: /Lookup/i });
+    fireEvent.click(lookupBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Assessment #d03ad53e/i)).toBeInTheDocument();
+      expect(screen.getByText(/Workflow: REJECTED/i)).toBeInTheDocument();
+      expect(screen.getByText(/Resolved Declaration 7dbc4c82 to Assessment d03ad53e/i)).toBeInTheDocument();
+    });
+  });
+
+  it('clears stale assessment data from UI on lookup failure so previous result is not retained', async () => {
+    const mockAssessment = {
+      id: 'asmt-existing-1',
+      declarationId: 'decl-1',
+      declarationVersion: 1,
+      ruleSnapshotId: 'snap-2026-q4-v1',
+      compartmentId: 'comp-standard-40ft',
+      workflowStatus: 'APPROVED'
+    };
+
+    vi.spyOn(assessmentApi, 'getAssessment').mockImplementation(async (id: string) => {
+      if (id === 'asmt-existing-1') return mockAssessment as any;
+      throw new Error(`Assessment not found: ${id}`);
+    });
+    vi.spyOn(declarationApi, 'getWorkflowProjection').mockRejectedValue(new Error('Declaration not found'));
+    vi.spyOn(declarationApi, 'getDeclaration').mockResolvedValue({ id: 'decl-1', items: [] } as any);
+
+    render(<PlannerReviewPage />);
+
+    const input = screen.getByPlaceholderText(/Lookup Assessment or Declaration ID/i);
+    const lookupBtn = screen.getByRole('button', { name: /Lookup/i });
+
+    // 1. Initial successful lookup
+    fireEvent.change(input, { target: { value: 'asmt-existing-1' } });
+    fireEvent.click(lookupBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Assessment #asmt-exi/i)).toBeInTheDocument();
+    });
+
+    // 2. Subsequent failed lookup with invalid ID
+    fireEvent.change(input, { target: { value: 'invalid-nonexistent-id' } });
+    fireEvent.click(lookupBtn);
+
+    await waitFor(() => {
+      // Previous assessment card MUST be cleared
+      expect(screen.queryByText(/Assessment #asmt-exi/i)).not.toBeInTheDocument();
+      // Error message must be clearly rendered
+      expect(screen.getByText(/Assessment not found: invalid-nonexistent-id/i)).toBeInTheDocument();
     });
   });
 
@@ -135,7 +230,7 @@ describe('PlannerReviewPage Component Workflow Integration', () => {
 
     render(<PlannerReviewPage />);
 
-    const input = screen.getByPlaceholderText(/Lookup Assessment ID/i);
+    const input = screen.getByPlaceholderText(/Lookup Assessment or Declaration ID/i);
     fireEvent.change(input, { target: { value: 'asmt-opt-fail' } });
 
     const lookupBtn = screen.getByRole('button', { name: /Lookup/i });

@@ -54,10 +54,15 @@ export interface CargoDeclaration {
 
 export interface DeclarationWorkflowProjection {
   declarationId: string;
-  lastAssessmentId: string | null;
-  status: 'SUBMITTED' | 'UNDER_ASSESSMENT' | 'OPTIMIZED' | 'APPROVED' | 'REJECTED';
-  lastRejectionReasonCode: string | null;
-  updatedAt: string | null;
+  assessmentId?: string | null;
+  lastAssessmentId?: string | null;
+  workflowStatus?: 'PENDING' | 'OPTIMIZING' | 'APPROVED' | 'REJECTED' | 'SUBMITTED' | string;
+  status?: 'SUBMITTED' | 'UNDER_ASSESSMENT' | 'OPTIMIZED' | 'APPROVED' | 'REJECTED' | string;
+  rejectionReasonCode?: string | null;
+  lastRejectionReasonCode?: string | null;
+  rejectionNotes?: string | null;
+  lastUpdated?: string | null;
+  updatedAt?: string | null;
 }
 
 // Compartment & Assessment types
