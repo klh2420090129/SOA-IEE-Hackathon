@@ -125,7 +125,7 @@ Log-Info "--- [SCENARIO A: VALID CANDIDATE & PLANNER APPROVAL] ---"
 $declRefA = "DECL-DEMO-A-$Timestamp"
 $declPayloadA = @{
     referenceNumber = $declRefA
-    shipperId = $ShipperUser
+    shipperId = $shipperAuth.userId
     origin = "Hazmat Facility Terminal 1"
     destination = "Regional Logistics Hub"
     items = @(
@@ -307,7 +307,7 @@ Log-Info "`n--- [SCENARIO B: REJECTED WORKFLOW & DOWNSTREAM PROJECTION] ---"
 $declRefB = "DECL-DEMO-B-$Timestamp"
 $declPayloadB = @{
     referenceNumber = $declRefB
-    shipperId = $ShipperUser
+    shipperId = $shipperAuth.userId
     origin = "Hazardous Warehouse Area 4"
     destination = "Inland Depot"
     items = @(
